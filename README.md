@@ -63,6 +63,10 @@ The script expects an `.env` file (or equivalent environment variables) providin
 
 `python-dotenv` loads this automatically at startup.
 
+### Claude (Anthropic) support
+
+This project can be configured to use Anthropic/Claude as an alternative embedding provider. See `CLAUDE.md` for setup instructions, environment variables, and a minimal usage example. If you choose Claude, set `CLAUDE_API_KEY` (or add it to `citizenphilsecrets.py`) and update the embedding wrapper in `embedding-update.py` to call the Claude SDK instead of OpenAI.
+
 ### ChromaDB
 
 The script connects to ChromaDB via:
