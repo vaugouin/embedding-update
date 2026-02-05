@@ -1073,7 +1073,7 @@ try:
                     cp.f_setservervariable("strembeddingupdategroupnotdeletereport",f"Not deleted {lngnondeletedcount} group docs","",0)
                     cp.f_setservervariable("strembeddingupdategroupid","","Current group ID in the embedding update process",0)
                 elif intindex == 209:
-                    # Create embeddings for the locations
+                    # Create embeddings for the locations (narrative location, filming location)
                     strentityname = "location"
                     strentitycollection = "locations"
                     print("Create embeddings for the " + strentitycollection)
@@ -1082,7 +1082,7 @@ try:
                     # , T_WC_WIKIDATA_ITEM.LABEL, T_WC_WIKIDATA_ITEM.DELETED
                     strsql += "FROM T_WC_WIKIDATA_ITEM_PROPERTY "
                     #strsql += "INNER JOIN T_WC_WIKIDATA_ITEM ON T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM = T_WC_WIKIDATA_ITEM.ID_WIKIDATA "
-                    strsql += "WHERE T_WC_WIKIDATA_ITEM_PROPERTY.ID_PROPERTY = 'P840' "
+                    strsql += "WHERE T_WC_WIKIDATA_ITEM_PROPERTY.ID_PROPERTY IN ('P840', 'P915') "
                     if strlocationidold != "":
                         strsql += "AND T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM >= '" + strlocationidold + "' "
                     strsql += "ORDER BY T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM ASC "
