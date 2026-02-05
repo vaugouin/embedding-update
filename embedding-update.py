@@ -114,6 +114,12 @@ groups = chroma_client.get_or_create_collection(
     name=strentitycollection,
     embedding_function=embedding_function  # Custom embedding model
 )
+strentitycollection = "locations"
+locations = chroma_client.get_or_create_collection(
+    name=strentitycollection,
+    embedding_function=embedding_function  # Custom embedding model
+)
+
 #Anonymized queries collection
 anonymizedqueries = chroma_client.get_or_create_collection(
     name="anonymizedqueries",
@@ -138,8 +144,8 @@ try:
             # Approximate 4 characters per token, so limit to ~32,000 characters to be safe
             max_chars = 30000
 
-            #arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 207: 'character', 208: 'group'}
-            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network'}
+            #arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 207: 'character', 208: 'group', 209: 'location'}
+            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 209: 'location'}
             strtopicidold = cp.f_getservervariable("strembeddingupdatetopicid",0)
             strmovieidold = cp.f_getservervariable("strembeddingupdatemovieid",0)
             strserieidold = cp.f_getservervariable("strembeddingupdateserieid",0)
@@ -148,19 +154,22 @@ try:
             strnetworkidold = cp.f_getservervariable("strembeddingupdatenetworkid",0)
             strcharacteridold = cp.f_getservervariable("strembeddingupdatecharacterid",0)
             strgroupidold = cp.f_getservervariable("strembeddingupdategroupid",0)
+            strlocationidold = cp.f_getservervariable("strembeddingupdatelocationid",0)
 
             strcurrentcontent = cp.f_getservervariable("strembeddingupdatecurrentcontent",0)
             
             if strcurrentcontent == "movie":
-                arrprocessscope = {202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network'}
+                arrprocessscope = {202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 209: 'location'}
             elif strcurrentcontent == "serie":
-                arrprocessscope = {203: 'serie', 204: 'person', 205: 'company', 206: 'network'}
+                arrprocessscope = {203: 'serie', 204: 'person', 205: 'company', 206: 'network', 209: 'location'}
             elif strcurrentcontent == "person":
-                arrprocessscope = {204: 'person', 205: 'company', 206: 'network'}
+                arrprocessscope = {204: 'person', 205: 'company', 206: 'network', 209: 'location'}
             elif strcurrentcontent == "company":
-                arrprocessscope = {205: 'company', 206: 'network'}
+                arrprocessscope = {205: 'company', 206: 'network', 209: 'location'}
             elif strcurrentcontent == "network":
-                arrprocessscope = {206: 'network'}
+                arrprocessscope = {206: 'network', 209: 'location'}
+            elif strcurrentcontent == "location":
+                arrprocessscope = {209: 'location'}
             """
             elif strcurrentcontent == "character":
                 arrprocessscope = {207: 'character', 208: 'group'}
@@ -1063,7 +1072,111 @@ try:
                     cp.f_setservervariable("strembeddingupdategroupdeletereport",f"Deleted {lngdeletedcount} group docs (enabled)","",0)
                     cp.f_setservervariable("strembeddingupdategroupnotdeletereport",f"Not deleted {lngnondeletedcount} group docs","",0)
                     cp.f_setservervariable("strembeddingupdategroupid","","Current group ID in the embedding update process",0)
-                if intindex == 206:
+                elif intindex == 209:
+                    # Create embeddings for the locations
+                    strentityname = "location"
+                    strentitycollection = "locations"
+                    print("Create embeddings for the " + strentitycollection)
+                    strsql = ""
+                    strsql += "SELECT DISTINCT T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM "
+                    # , T_WC_WIKIDATA_ITEM.LABEL, T_WC_WIKIDATA_ITEM.DELETED
+                    strsql += "FROM T_WC_WIKIDATA_ITEM_PROPERTY "
+                    #strsql += "INNER JOIN T_WC_WIKIDATA_ITEM ON T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM = T_WC_WIKIDATA_ITEM.ID_WIKIDATA "
+                    strsql += "WHERE T_WC_WIKIDATA_ITEM_PROPERTY.ID_PROPERTY = 'P840' "
+                    if strlocationidold != "":
+                        strsql += "AND T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM >= '" + strlocationidold + "' "
+                    strsql += "ORDER BY T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM ASC "
+                    cursor.execute(strsql)
+                    lngrowcount = cursor.rowcount
+                    print(f"{lngrowcount} lines")
+                    results = cursor.fetchall()
+                    for row in results:
+                        strlocationid = row['ID_ITEM']
+                        cp.f_setservervariable("strembeddingupdatelocationid",strlocationid,"Current location ID in the embedding update process",0)
+                        strsql2 = "SELECT T_WC_WIKIDATA_ITEM.LABEL, T_WC_WIKIDATA_ITEM.DELETED FROM T_WC_WIKIDATA_ITEM WHERE T_WC_WIKIDATA_ITEM.ID_WIKIDATA = '" + strlocationid + "' "
+                        print(strsql2)
+                        cursor2.execute(strsql2)
+                        lngrowcount2 = cursor2.rowcount
+                        if lngrowcount2 > 0:
+                            strlocationname = cursor2.fetchone()['LABEL'].strip()
+                            intdeleted = cursor2.fetchone()['DELETED']
+                            strdocid = strentityname + "id_" + strlocationid + "_en"
+                            strlocationfulldesc = strlocationname
+                            if len(strlocationfulldesc) > max_chars:
+                                strlocationfulldesc = strlocationfulldesc[:max_chars] + "..."
+                            print(strlocationfulldesc)
+                            existing_doc = locations.get(ids=[strdocid])
+                            if existing_doc and len(existing_doc['ids']) > 0:
+                                strdoctext = existing_doc['documents'][0]
+                                if strdoctext == strlocationfulldesc:
+                                    # This document was already processed to an embedding
+                                    # Nothing to do 
+                                    #print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> ALREADY PROCESSED")
+                                    continue
+                            if intdeleted == 1:
+                                # This document was deleted in the source database
+                                # So we must delete it in ChromaDB
+                                if existing_doc and len(existing_doc['ids']) > 0:
+                                    locations.delete(ids=[strdocid])
+                                    print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> DELETED")
+                                    continue
+                            # Check if the document exists in ChromaDB
+                            if existing_doc and len(existing_doc['ids']) > 0:
+                                # If the document exists, update it
+                                locations.update(
+                                    ids=[strdocid],
+                                    documents=[strlocationfulldesc]  # New updated text
+                                )
+                                print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> UPDATED")
+                            else:
+                                # If the document does not exist, add it
+                                locations.add(
+                                    ids=[strdocid],
+                                    documents=[strlocationfulldesc]
+                                )
+                                print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> ADDED")
+                    # Now delete all location embeddings that do not exist anymore in the source table
+                    print("Delete all location embeddings that do not exist anymore in the source table")
+                    batch_size = 1000
+                    offset = 0
+                    lngdeletedcount = 0
+                    lngnondeletedcount = 0
+                    while True:
+                        # Step 1: get all ids from locations
+                        results = locations.get(include=[], limit=batch_size, offset=offset)
+                        ids = results["ids"]
+                        #print(results["ids"])
+                        if not ids:
+                            break
+                        for id in ids:
+                            # Extract the 3 parts from id using underscore separator
+                            parts = id.split('_')
+                            docentity = parts[0]
+                            docid = parts[1]
+                            doclang = parts[2]
+                            if docentity != strentityname + "id":
+                                continue
+                            strsql = "SELECT ID_WIKIDATA FROM T_WC_WIKIDATA_ITEM WHERE ID_WIKIDATA = '" + docid + "' "
+                            #print(strsql)
+                            cursor.execute(strsql)
+                            lngrowcount = cursor.rowcount
+                            if lngrowcount == 0:
+                                locations.delete(ids=[id])
+                                print(f"Deleted {id} ")
+                                lngdeletedcount += 1
+                            else:
+                                print(f"Not deleted {id} ")
+                                lngnondeletedcount += 1
+                        if len(ids) < batch_size:
+                            break
+                        offset += batch_size
+                    print(f"Deleted {lngdeletedcount} location docs")
+                    print(f"Not deleted {lngnondeletedcount} location docs")
+                    cp.f_setservervariable("strembeddingupdatelocationdeletereport",f"Deleted {lngdeletedcount} location docs (enabled)","",0)
+                    cp.f_setservervariable("strembeddingupdatelocationnotdeletereport",f"Not deleted {lngnondeletedcount} location docs","",0)
+                    cp.f_setservervariable("strembeddingupdatelocationid","","Current location ID in the embedding update process",0)
+
+                if intindex == 209:
                     cp.f_setservervariable("strembeddingupdatecurrentcontent","","Current content processed in the embedding update process",0)
             # Calculate total runtime and convert to readable format
             end_time = time.time()
