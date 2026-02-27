@@ -1079,9 +1079,7 @@ try:
                     print("Create embeddings for the " + strentitycollection)
                     strsql = ""
                     strsql += "SELECT DISTINCT T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM "
-                    # , T_WC_WIKIDATA_ITEM.LABEL, T_WC_WIKIDATA_ITEM.DELETED
                     strsql += "FROM T_WC_WIKIDATA_ITEM_PROPERTY "
-                    #strsql += "INNER JOIN T_WC_WIKIDATA_ITEM ON T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM = T_WC_WIKIDATA_ITEM.ID_WIKIDATA "
                     strsql += "WHERE T_WC_WIKIDATA_ITEM_PROPERTY.ID_PROPERTY IN ('P840', 'P915') "
                     if strlocationidold != "":
                         strsql += "AND T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM >= '" + strlocationidold + "' "
