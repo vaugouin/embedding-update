@@ -176,7 +176,9 @@ try:
             elif strcurrentcontent == "group":
                 arrprocessscope = {208: 'group'}
             """
-            #arrprocessscope = {201: 'topic'}
+            if strnow.startswith('2026-03-03'):
+                # Tesing location embeddings update
+                arrprocessscope = {209: 'location'}
             """
             # Fix to delete all movies with id like serieid* 
             print("Fix to delete all movies with id like serieid*")
@@ -1089,8 +1091,9 @@ try:
                     strentitycollection = "locations"
                     print("Create embeddings for the " + strentitycollection)
                     strsql = ""
-                    strsql += "SELECT DISTINCT T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM "
+                    strsql += "SELECT DISTINCT T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM, 'en' AS ENGLISH_LANGUAGE, t2s.ITEM_LABEL, 'fr' AS FRENCH_LANGUAGE, t2s.ITEM_LABEL_FR, t2s.DELETED "
                     strsql += "FROM T_WC_WIKIDATA_ITEM_PROPERTY "
+                    strsql += "INNER JOIN T_WC_T2S_ITEM t2s ON T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM = t2s.ID_WIKIDATA "
                     strsql += "WHERE T_WC_WIKIDATA_ITEM_PROPERTY.ID_PROPERTY IN ('P840', 'P915') "
                     if strlocationidold != "":
                         strsql += "AND T_WC_WIKIDATA_ITEM_PROPERTY.ID_ITEM >= '" + strlocationidold + "' "
@@ -1102,50 +1105,60 @@ try:
                     for row in results:
                         strlocationid = row['ID_ITEM']
                         cp.f_setservervariable("strembeddingupdatelocationid",strlocationid,"Current location ID in the embedding update process",0)
-                        strsql2 = "SELECT T_WC_WIKIDATA_ITEM.LABEL, T_WC_WIKIDATA_ITEM.DELETED FROM T_WC_WIKIDATA_ITEM WHERE T_WC_WIKIDATA_ITEM.ID_WIKIDATA = '" + strlocationid + "' "
-                        print(strsql2)
-                        cursor2.execute(strsql2)
-                        lngrowcount2 = cursor2.rowcount
-                        if lngrowcount2 > 0:
-                            strlocationname = cursor2.fetchone()['LABEL'].strip()
-                            intdeleted = cursor2.fetchone()['DELETED']
-                            strdocid = strentityname + "id_" + strlocationid + "_en"
-                            strlocationfulldesc = strlocationname
-                            if len(strlocationfulldesc) > max_chars:
-                                strlocationfulldesc = strlocationfulldesc[:max_chars] + "..."
-                            print(strlocationfulldesc)
-                            existing_doc = locations.get(ids=[strdocid])
-                            if existing_doc and len(existing_doc['ids']) > 0:
-                                strdoctext = existing_doc['documents'][0]
-                                if strdoctext == strlocationfulldesc:
-                                    # This document was already processed to an embedding
-                                    # Nothing to do 
-                                    #print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> ALREADY PROCESSED")
-                                    continue
-                            if intdeleted == 1:
-                                # This document was deleted in the source database
-                                # So we must delete it in ChromaDB
-                                if existing_doc and len(existing_doc['ids']) > 0:
+                        arrlanguage = {}
+                        arrtitle = {}
+                        arrlanguage['en'] = (row.get('ENGLISH_LANGUAGE') or '').strip()
+                        arrtitle['en'] = (row.get('ITEM_LABEL') or '').strip()
+                        arrlanguage['fr'] = (row.get('FRENCH_LANGUAGE') or '').strip()
+                        arrtitle['fr'] = (row.get('ITEM_LABEL_FR') or '').strip()
+
+                        strlocationname = arrtitle['en']
+                        intdeleted = row.get('DELETED', 0)
+                        # Process embeddings for each title in each language
+                        for lang_code in arrlanguage.keys():
+                            if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
+                                strdocid = strentityname + "id_" + strlocationid + "_" + lang_code
+                                strlocationfulldesc = arrtitle[lang_code]
+                                if len(strlocationfulldesc) > max_chars:
+                                    strlocationfulldesc = strlocationfulldesc[:max_chars] + "..."
+                                print(strlocationfulldesc)
+                                # Check if the document exists in ChromaDB
+                                existing_doc = locations.get(ids=[strdocid])
+
+                                if intdeleted == 1:
+                                    # This document is deleted
+                                    # Delete it from the collection
                                     locations.delete(ids=[strdocid])
                                     print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> DELETED")
                                     continue
-                            # Check if the document exists in ChromaDB
-                            if existing_doc and len(existing_doc['ids']) > 0:
-                                # If the document exists, update it
-                                locations.update(
-                                    ids=[strdocid],
-                                    documents=[strlocationfulldesc]  # New updated text
-                                )
-                                print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> UPDATED")
-                            else:
-                                # If the document does not exist, add it
-                                locations.add(
-                                    ids=[strdocid],
-                                    documents=[strlocationfulldesc]
+                                
+                                if existing_doc and len(existing_doc['ids']) > 0:
+                                    strdoctext = existing_doc['documents'][0]
+                                    if strdoctext == strlocationfulldesc:
+                                        # This document was already processed to an embedding
+                                        # Nothing to do 
+                                        #print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> ALREADY PROCESSED")
+                                        continue
+                                
+                                # Check if the document exists in ChromaDB
+                                if existing_doc and len(existing_doc['ids']) > 0:
+                                    locations.update(
+                                        ids=[strdocid],
+                                        documents=[strlocationfulldesc],
+                                        metadatas=[{"id": strlocationid, "language": lang_code}]                                        
+                                    )
+                                    print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> UPDATED")
+                                else:
+                                    # Add it to the collection
+                                    locations.add(
+                                        ids=[strdocid],
+                                        documents=[strlocationfulldesc],
+                                        metadatas=[{"id": strlocationid, "language": lang_code}]                                        
                                 )
                                 print(f"ID_ITEM: {strlocationid}, {strlocationfulldesc} -> ADDED")
-                    # Now delete all location embeddings that do not exist anymore in the source table
-                    print("Delete all location embeddings that do not exist anymore in the source table")
+
+                    # Now delete all location embeddings that do not exist anymore in the T2S_ITEM table
+                    print("Delete all location embeddings that do not exist anymore in the T2S_ITEM table")
                     batch_size = 1000
                     offset = 0
                     lngdeletedcount = 0
@@ -1165,7 +1178,7 @@ try:
                             doclang = parts[2]
                             if docentity != strentityname + "id":
                                 continue
-                            strsql = "SELECT ID_WIKIDATA FROM T_WC_WIKIDATA_ITEM WHERE ID_WIKIDATA = '" + docid + "' "
+                            strsql = "SELECT ID_WIKIDATA FROM T_WC_T2S_ITEM WHERE ID_WIKIDATA = '" + docid + "' "
                             #print(strsql)
                             cursor.execute(strsql)
                             lngrowcount = cursor.rowcount
@@ -1186,6 +1199,7 @@ try:
                     cp.f_setservervariable("strembeddingupdatelocationid","","Current location ID in the embedding update process",0)
 
                 if intindex == 209:
+                    # Last process is finished
                     cp.f_setservervariable("strembeddingupdatecurrentcontent","","Current content processed in the embedding update process",0)
             # Calculate total runtime and convert to readable format
             end_time = time.time()
