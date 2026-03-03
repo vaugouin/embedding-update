@@ -176,7 +176,7 @@ try:
             elif strcurrentcontent == "group":
                 arrprocessscope = {208: 'group'}
             """
-            
+            #arrprocessscope = {201: 'topic'}
             """
             # Fix to delete all movies with id like serieid* 
             print("Fix to delete all movies with id like serieid*")
@@ -210,7 +210,7 @@ try:
                     strentitycollection = "topics"
                     print("Create embeddings for the " + strentitycollection)
                     strsql = ""
-                    strsql += "SELECT ID_TOPIC, ID_RECORD, TOPIC_NAME, OVERVIEW, TOPIC_TYPE, LANG, DELETED, MOVIE_COUNT, SERIE_COUNT "
+                    strsql += "SELECT DISTINCT ID_TOPIC, ID_RECORD, 'en' AS ENGLISH_LANGUAGE, TOPIC_NAME AS ENGLISH_NAME, 'fr' AS FRENCH_LANGUAGE, TOPIC_NAME_FR AS FRENCH_NAME, OVERVIEW, TOPIC_TYPE, DELETED, MOVIE_COUNT, SERIE_COUNT "
                     strsql += "FROM T_WC_T2S_TOPIC "
                     if strtopicidold != "":
                         strsql += "WHERE ID_TOPIC >= " + strtopicidold + " "
@@ -222,52 +222,63 @@ try:
                     for row in results:
                         lngtopicid = row['ID_TOPIC']
                         cp.f_setservervariable("strembeddingupdatetopicid",str(lngtopicid),"Current topic ID in the embedding update process",0)
-                        strtopicname = row['TOPIC_NAME'].strip()
-                        strtopicoverview = row['OVERVIEW'].strip()
+                        arrlanguage = {}
+                        arrtitle = {}
+                        arrlanguage['en'] = (row.get('ENGLISH_LANGUAGE') or '').strip()
+                        arrtitle['en'] = (row.get('ENGLISH_NAME') or '').strip()
+                        arrlanguage['fr'] = (row.get('FRENCH_LANGUAGE') or '').strip()
+                        arrtitle['fr'] = (row.get('FRENCH_NAME') or '').strip()
+
+                        strtopicoverview = (row.get('OVERVIEW') or '').strip()
                         lngtopictype = row['TOPIC_TYPE']
                         intdeleted = row['DELETED']
-                        strtopiclang = row['LANG'].strip()
                         lngmoviecount = row['MOVIE_COUNT']
                         lngseriecount = row['SERIE_COUNT']
                         lngelementcount = lngmoviecount + lngseriecount
                         strtopicoverview = strtopicoverview.replace("\n", " ")
-                        strdocid = strentityname + "id_" + str(lngtopicid) + "_" + strtopiclang
-                        strtopicfulldesc = strtopicname
-                        if strtopicoverview != "": 
-                            strtopicfulldesc += ": " + strtopicoverview
-                        if len(strtopicfulldesc) > max_chars:
-                            strtopicfulldesc = strtopicfulldesc[:max_chars] + "..."
-                        existing_doc = topics.get(ids=[strdocid])
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            strdoctext = existing_doc['documents'][0]
-                            if strdoctext == strtopicfulldesc:
-                                # This document was already processed to an embedding
-                                # Nothing to do 
-                                #print(f"ID_TOPIC: {lngtopicid}, {strtopicfulldesc} -> ALREADY PROCESSED")
-                                continue
-                        if intdeleted == 1 or lngelementcount <= 1:
-                            # This document was deleted in the source database
-                            # Or this topic has no element or a single element
-                            # So we must delete it in ChromaDB
-                            if existing_doc and len(existing_doc['ids']) > 0:
-                                topics.delete(ids=[strdocid])
-                                print(f"ID_TOPIC: {lngtopicid}, {strtopicfulldesc} -> DELETED")
-                                continue
-                        # Check if the document exists in ChromaDB
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            # If the document exists, update it
-                            topics.update(
-                                ids=[strdocid],
-                                documents=[strtopicfulldesc]  # New updated text
-                            )
-                            print(f"ID_TOPIC: {lngtopicid}, {strtopicfulldesc} -> UPDATED")
-                        else:
-                            # If the document does not exist, add it
-                            topics.add(
-                                ids=[strdocid],
-                                documents=[strtopicfulldesc]
-                            )
-                            print(f"ID_TOPIC: {lngtopicid}, {strtopicfulldesc} -> ADDED")
+
+                        # Process embeddings for each title in each language
+                        for lang_code in arrlanguage.keys():
+                            if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
+                                strtopictitle = arrtitle[lang_code].strip()
+                                strtopiclang = arrlanguage[lang_code].strip()
+                                strdocid = strentityname + "id_" + str(lngtopicid) + "_" + strtopiclang
+                                strtopicfulldesc = strtopictitle
+                                if strtopicoverview != "":
+                                    strtopicfulldesc += ": " + strtopicoverview
+                                if len(strtopicfulldesc) > max_chars:
+                                    strtopicfulldesc = strtopicfulldesc[:max_chars] + "..."
+
+                                # Check if the document content already exists in ChromaDB
+                                existing_doc = topics.get(ids=[strdocid])
+
+                                if intdeleted == 1 or lngelementcount <= 1:
+                                    # This document was deleted in the source database
+                                    # Or this topic has no element or a single element
+                                    # So we must delete it in ChromaDB
+                                    if existing_doc and len(existing_doc['ids']) > 0:
+                                        topics.delete(ids=[strdocid])
+                                        print(f"ID_TOPIC: {lngtopicid}, {strtopicfulldesc} ({strtopiclang}) -> DELETED")
+                                    continue
+
+                                if existing_doc and len(existing_doc['ids']) > 0:
+                                    strdoctext = existing_doc['documents'][0]
+                                    if strdoctext == strtopicfulldesc:
+                                        continue
+
+                                # Check if the document exists in ChromaDB
+                                if existing_doc and len(existing_doc['ids']) > 0:
+                                    topics.update(
+                                        ids=[strdocid],
+                                        documents=[strtopicfulldesc]  # New updated text
+                                    )
+                                    print(f"ID_TOPIC: {lngtopicid}, {strtopicfulldesc} ({strtopiclang}) -> UPDATED")
+                                else:
+                                    topics.add(
+                                        ids=[strdocid],
+                                        documents=[strtopicfulldesc]
+                                    )
+                                    print(f"ID_TOPIC: {lngtopicid}, {strtopicfulldesc} ({strtopiclang}) -> ADDED")
                     # Now delete all topic embeddings that do not exist anymore in the T2S_TOPIC table
                     print("Delete all topic embeddings that do not exist anymore in the T2S_TOPIC table")
                     batch_size = 1000
@@ -289,7 +300,7 @@ try:
                             doclang = parts[2]
                             if docentity != strentityname + "id":
                                 continue
-                            strsql = "SELECT ID_TOPIC FROM T_WC_T2S_TOPIC WHERE ID_TOPIC = " + docid + " AND LANG = '" + doclang + "'"
+                            strsql = "SELECT ID_TOPIC FROM T_WC_T2S_TOPIC WHERE ID_TOPIC = " + docid
                             #print(strsql)
                             cursor.execute(strsql)
                             lngrowcount = cursor.rowcount
