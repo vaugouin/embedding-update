@@ -24,6 +24,7 @@ if not openai.api_key:
 
 class OpenAIEmbeddingFunction:
     def __init__(self, model="text-embedding-3-large"):
+        """Initialize with the given OpenAI embedding model name."""
         self.model = model
 
     def __call__(self, input):
@@ -76,52 +77,43 @@ cp.f_setservervariable(strservervariablenameprocessesexecutedprevious,strprocess
 strprocessesexecuted = ""
 cp.f_setservervariable(strservervariablenameprocessesexecuted,strprocessesexecuted,strprocessesexecuteddesc,0)
 
-# Create or load a collection with the custom embedding function
-strentitycollection = "topics"
-topics = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
-strentitycollection = "movies"
-movies = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
-strentitycollection = "series"
-series = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
-strentitycollection = "persons"
-persons = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
-strentitycollection = "companies"
-companies = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
-strentitycollection = "networks"
-networks = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
-strentitycollection = "characters"
-characters = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
-strentitycollection = "groups"
-groups = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
-strentitycollection = "locations"
-locations = chroma_client.get_or_create_collection(
-    name=strentitycollection,
-    embedding_function=embedding_function  # Custom embedding model
-)
+# Create or load entity collections with the custom embedding function
+CHROMADB_COLLECTIONS_BY_NAME = {
+    name: chroma_client.get_or_create_collection(name=name, embedding_function=embedding_function)
+    for name in [
+        "persons",
+        "movies",
+        "series",
+        "companies",
+        "networks",
+        "topics",
+        "locations",
+        "groups",
+        "characters",
+        "lists",
+        "collections",
+        "deaths",
+        "awards",
+        "nominations",
+        "movements",
+    ]
+}
+
+topics = CHROMADB_COLLECTIONS_BY_NAME["topics"]
+movies = CHROMADB_COLLECTIONS_BY_NAME["movies"]
+series = CHROMADB_COLLECTIONS_BY_NAME["series"]
+persons = CHROMADB_COLLECTIONS_BY_NAME["persons"]
+companies = CHROMADB_COLLECTIONS_BY_NAME["companies"]
+networks = CHROMADB_COLLECTIONS_BY_NAME["networks"]
+characters = CHROMADB_COLLECTIONS_BY_NAME["characters"]
+groups = CHROMADB_COLLECTIONS_BY_NAME["groups"]
+locations = CHROMADB_COLLECTIONS_BY_NAME["locations"]
+lists = CHROMADB_COLLECTIONS_BY_NAME["lists"]
+collections = CHROMADB_COLLECTIONS_BY_NAME["collections"]
+deaths = CHROMADB_COLLECTIONS_BY_NAME["deaths"]
+awards = CHROMADB_COLLECTIONS_BY_NAME["awards"]
+nominations = CHROMADB_COLLECTIONS_BY_NAME["nominations"]
+movements = CHROMADB_COLLECTIONS_BY_NAME["movements"]
 
 #Anonymized queries collection
 anonymizedqueries = chroma_client.get_or_create_collection(
@@ -145,15 +137,564 @@ try:
             strtotalruntimedesc = "Total runtime of the embedding update process"
             strtotalruntimeprevious = cp.f_getservervariable(strservervariablenametotalruntime,0)
             cp.f_setservervariable(strservervariablenametotalruntimeprevious,strtotalruntimeprevious,strtotalruntimedesc + " (previous execution)",0)
-            strtotalruntime = ""
+            strtotalruntime = "RUNNING"
             cp.f_setservervariable(strservervariablenametotalruntime,strtotalruntime,strtotalruntimedesc,0)
             
             # Ensure text length is within text-embedding-3-large model limits (8191 tokens)
             # Approximate 4 characters per token, so limit to ~32,000 characters to be safe
             max_chars = 32000
 
-            #arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 207: 'character', 208: 'group', 209: 'location'}
-            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 209: 'location'}
+            def f_process_bilingual_t2s_entity_embeddings(*, strentityname, strentitycollection, strtablename, strkeyfieldname, stroldid, strtitlefielden, strtitlefieldfr, chromacollection, stridrecordfield="ID_RECORD", extra_metadata_fields=None, id_is_numeric=True, overview_field="OVERVIEW", extra_select_fields=None, should_delete_row=None):
+                """Sync bilingual (EN/FR) ChromaDB embeddings for a T2S entity table.
+
+                Queries the database for rows updated since the last run (or from `stroldid`),
+                then adds, updates, or deletes the corresponding ChromaDB documents for both
+                the English and French titles. Appends the overview to the document text when
+                available. After processing updates, sweeps the collection and removes any
+                stale documents whose source row no longer exists in the database.
+
+                Args:
+                    strentityname: Short entity identifier used in doc IDs and server variables
+                        (e.g. ``"topic"``).
+                    strentitycollection: Human-readable collection label for log messages
+                        (e.g. ``"topics"``).
+                    strtablename: Source database table name.
+                    strkeyfieldname: Primary-key column name in the source table.
+                    stroldid: Resume from this ID value (empty string to start from the
+                        beginning).
+                    strtitlefielden: Column name for the English title.
+                    strtitlefieldfr: Column name for the French title.
+                    chromacollection: Target ChromaDB collection object.
+                    stridrecordfield: Optional secondary record-ID column included in metadata.
+                    extra_metadata_fields: Dict mapping metadata key → column name for
+                        additional fields to store in ChromaDB metadata.
+                    id_is_numeric: Whether the primary key is numeric (affects SQL quoting).
+                    overview_field: Column name for the overview/description text appended to
+                        the embedding document.
+                    extra_select_fields: List of extra column names to SELECT (used by
+                        ``should_delete_row``).
+                    should_delete_row: Optional callable ``(row) -> bool``; when it returns
+                        ``True`` the embedding is deleted even if ``DELETED`` is 0.
+                """
+                print("Create embeddings for the " + strentitycollection)
+
+                strservervariablenameid = strservervariableprefix + strentityname + "id"
+                strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
+                strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
+                strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
+
+                strstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime, 0)
+                strprocessstartlocal = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+                strsql = ""
+                strsql += "SELECT DISTINCT " + strkeyfieldname + ", "
+                if stridrecordfield is not None and str(stridrecordfield).strip() != "":
+                    strsql += stridrecordfield + ", "
+                if extra_metadata_fields is not None:
+                    for md_key, md_col in extra_metadata_fields.items():
+                        if md_col is not None and str(md_col).strip() != "":
+                            strsql += str(md_col) + ", "
+                if extra_select_fields is not None:
+                    for extra_col in extra_select_fields:
+                        if extra_col is not None and str(extra_col).strip() != "":
+                            strsql += str(extra_col) + ", "
+                strsql += "'en' AS ENGLISH_LANGUAGE, " + strtitlefielden + ", 'fr' AS FRENCH_LANGUAGE, " + strtitlefieldfr + ", "
+                if overview_field is not None and str(overview_field).strip() != "":
+                    strsql += str(overview_field) + ", "
+                strsql += "DELETED "
+                strsql += "FROM " + strtablename + " "
+                if stroldid != "":
+                    if id_is_numeric:
+                        strsql += "WHERE " + strkeyfieldname + " >= " + stroldid + " "
+                    else:
+                        stroldid_sql = str(stroldid).replace("'", "''")
+                        strsql += "WHERE " + strkeyfieldname + " >= '" + stroldid_sql + "' "
+                if strstartdatetimeprevious is not None and str(strstartdatetimeprevious).strip() != "":
+                    strstartdatetimeprevious = str(strstartdatetimeprevious).strip().replace("'", "''")
+                    if stroldid != "":
+                        strsql += "AND TIM_UPDATED >= '" + strstartdatetimeprevious + "' "
+                    else:
+                        strsql += "WHERE TIM_UPDATED >= '" + strstartdatetimeprevious + "' "
+                strsql += "ORDER BY " + strkeyfieldname + " ASC "
+                print(strsql)
+                try:
+                    cursor.execute(strsql)
+                except Exception:
+                    strsql = ""
+                    strsql += "SELECT DISTINCT " + strkeyfieldname + ", "
+                    if stridrecordfield is not None and str(stridrecordfield).strip() != "":
+                        strsql += stridrecordfield + ", "
+                    if extra_metadata_fields is not None:
+                        for md_key, md_col in extra_metadata_fields.items():
+                            if md_col is not None and str(md_col).strip() != "":
+                                strsql += str(md_col) + ", "
+                    if extra_select_fields is not None:
+                        for extra_col in extra_select_fields:
+                            if extra_col is not None and str(extra_col).strip() != "":
+                                strsql += str(extra_col) + ", "
+                    strsql += "'en' AS ENGLISH_LANGUAGE, " + strtitlefielden + ", 'fr' AS FRENCH_LANGUAGE, " + strtitlefieldfr + ", "
+                    if overview_field is not None and str(overview_field).strip() != "":
+                        strsql += str(overview_field) + ", "
+                    strsql += "DELETED "
+                    strsql += "FROM " + strtablename + " "
+                    if stroldid != "":
+                        if id_is_numeric:
+                            strsql += "WHERE " + strkeyfieldname + " >= " + stroldid + " "
+                        else:
+                            stroldid_sql = str(stroldid).replace("'", "''")
+                            strsql += "WHERE " + strkeyfieldname + " >= '" + stroldid_sql + "' "
+                    strsql += "ORDER BY " + strkeyfieldname + " ASC "
+                    print(strsql)
+                    cursor.execute(strsql)
+                lngrowcount = cursor.rowcount
+                print(f"{lngrowcount} lines")
+                results = cursor.fetchall()
+                for row in results:
+                    lngentityid = row[strkeyfieldname]
+                    lngrecordid = None
+                    if stridrecordfield is not None and str(stridrecordfield).strip() != "":
+                        lngrecordid = row.get(stridrecordfield)
+                    cp.f_setservervariable(strservervariablenameid, str(lngentityid), f"Current {strentityname} ID in the embedding update process", 0)
+                    arrlanguage = {}
+                    arrtitle = {}
+                    arrlanguage['en'] = (row.get('ENGLISH_LANGUAGE') or '').strip()
+                    arrtitle['en'] = (row.get(strtitlefielden) or '').strip()
+                    arrlanguage['fr'] = (row.get('FRENCH_LANGUAGE') or '').strip()
+                    arrtitle['fr'] = (row.get(strtitlefieldfr) or '').strip()
+                    stroverview = ""
+                    if overview_field is not None and str(overview_field).strip() != "":
+                        stroverview = (row.get(overview_field) or '').strip()
+                        stroverview = stroverview.replace("\n", " ")
+                    intdeleted = row.get('DELETED', 0)
+
+                    for lang_code in arrlanguage.keys():
+                        if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
+                            strdocid = strentityname + "id_" + str(lngentityid) + "_" + lang_code
+                            strfulldesc = arrtitle[lang_code]
+                            if stroverview != "":
+                                strfulldesc += ": " + stroverview
+                            if len(strfulldesc) > max_chars:
+                                strfulldesc = strfulldesc[:max_chars] + "..."
+                            print(strfulldesc)
+
+                            existing_doc = chromacollection.get(ids=[strdocid])
+
+                            should_delete_custom = False
+                            if should_delete_row is not None:
+                                try:
+                                    should_delete_custom = bool(should_delete_row(row))
+                                except Exception:
+                                    should_delete_custom = False
+
+                            if intdeleted == 1 or should_delete_custom:
+                                chromacollection.delete(ids=[strdocid])
+                                print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} -> DELETED")
+                                continue
+
+                            if existing_doc and len(existing_doc['ids']) > 0:
+                                strdoctext = existing_doc['documents'][0]
+                                if strdoctext == strfulldesc:
+                                    continue
+
+                            if existing_doc and len(existing_doc['ids']) > 0:
+                                metadata = {"id": str(lngentityid), "language": lang_code}
+                                if lngrecordid is not None:
+                                    metadata["id_record"] = str(lngrecordid)
+                                if extra_metadata_fields is not None:
+                                    for md_key, md_col in extra_metadata_fields.items():
+                                        metadata[md_key] = row.get(md_col)
+                                chromacollection.update(
+                                    ids=[strdocid],
+                                    documents=[strfulldesc],
+                                    metadatas=[metadata]
+                                )
+                                print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} -> UPDATED")
+                            else:
+                                metadata = {"id": str(lngentityid), "language": lang_code}
+                                if lngrecordid is not None:
+                                    metadata["id_record"] = str(lngrecordid)
+                                if extra_metadata_fields is not None:
+                                    for md_key, md_col in extra_metadata_fields.items():
+                                        metadata[md_key] = row.get(md_col)
+                                chromacollection.add(
+                                    ids=[strdocid],
+                                    documents=[strfulldesc],
+                                    metadatas=[metadata]
+                                )
+                                print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} -> ADDED")
+
+                print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
+                batch_size = 1000
+                offset = 0
+                lngdeletedcount = 0
+                lngnondeletedcount = 0
+                while True:
+                    results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    ids = results["ids"]
+                    if not ids:
+                        break
+                    for id in ids:
+                        parts = id.split('_')
+                        if len(parts) < 3:
+                            continue
+                        docentity = parts[0]
+                        docid = parts[1]
+                        doclang = parts[2]
+                        if docentity != strentityname + "id":
+                            continue
+                        if id_is_numeric:
+                            if not str(docid).isdigit():
+                                continue
+                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
+                        else:
+                            docid_sql = str(docid).replace("'", "''")
+                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = '" + docid_sql + "' "
+                        cursor.execute(strsql)
+                        lngrowcount = cursor.rowcount
+                        if lngrowcount == 0:
+                            chromacollection.delete(ids=[id])
+                            print(f"Deleted {id} ")
+                            lngdeletedcount += 1
+                        else:
+                            print(f"Not deleted {id} ")
+                            lngnondeletedcount += 1
+                    if len(ids) < batch_size:
+                        break
+                    offset += batch_size
+                print(f"Deleted {lngdeletedcount} {strentityname} docs")
+                print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
+                cp.f_setservervariable(strservervariablenamedeletereport, f"Deleted {lngdeletedcount} {strentityname} docs (enabled)", "", 0)
+                cp.f_setservervariable(strservervariablenamenotdeletereport, f"Not deleted {lngnondeletedcount} {strentityname} docs", "", 0)
+                cp.f_setservervariable(strservervariablenameid, "", f"Current {strentityname} ID in the embedding update process", 0)
+                cp.f_setservervariable(strservervariablenamestartdatetime, strprocessstartlocal, f"Date and time of the last start of the {strentityname} embedding update process", 0)
+
+            def f_process_en_fr_original_title_embeddings_from_lang_table(*, strentityname, strentitycollection, strtablename, strtablelang, strkeyfieldname, stroldid, chromacollection, strtitlefielden, strtitlefieldfr, stroriginal_language_field, stroriginal_title_field, id_is_numeric=True, check_duplicate_content_globally=True):
+                """Sync EN, FR, and original-language ChromaDB embeddings using a joined language table.
+
+                Queries the main entity table joined with a separate language/translation table
+                to obtain the English title, French title, and original-language title for each
+                entity. Creates one ChromaDB document per language variant (EN, FR, and the
+                original language when different). Entities without a Wikidata ID are treated as
+                deleted. After processing updates, sweeps the collection and removes stale
+                documents whose source row no longer exists in the database.
+
+                Unlike ``f_process_bilingual_t2s_entity_embeddings``, this function does not
+                append an overview and optionally checks the collection for duplicate content
+                before inserting a new document.
+
+                Args:
+                    strentityname: Short entity identifier used in doc IDs and server variables
+                        (e.g. ``"movie"``).
+                    strentitycollection: Human-readable collection label for log messages.
+                    strtablename: Main entity database table name.
+                    strtablelang: Language/translation table joined to the main table.
+                    strkeyfieldname: Primary-key column name shared by both tables.
+                    stroldid: Resume from this ID value (empty string to start from the
+                        beginning).
+                    chromacollection: Target ChromaDB collection object.
+                    strtitlefielden: Column name for the English title in the main table.
+                    strtitlefieldfr: Column name for the French title in the language table.
+                    stroriginal_language_field: Column name for the original language code.
+                    stroriginal_title_field: Column name for the original-language title.
+                    id_is_numeric: Whether the primary key is numeric (affects SQL quoting).
+                    check_duplicate_content_globally: When ``True``, queries the collection for
+                        an exact-match document before adding a new one to avoid duplicates.
+                """
+                print("Create embeddings for the " + strentitycollection)
+
+                strservervariablenameid = strservervariableprefix + strentityname + "id"
+                strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
+                strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
+                strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
+
+                strstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime, 0)
+                strprocessstartlocal = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+                strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + "." + strtitlefielden + " AS ENGLISH_TITLE, " + strtablename + "." + stroriginal_language_field + ", " + strtablename + "." + stroriginal_title_field + ", " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + "." + strtitlefieldfr + " AS FRENCH_TITLE, " + strtablename + ".DELETED "
+                strsql += "FROM " + strtablename + " "
+                strsql += "LEFT JOIN " + strtablelang + " ON " + strtablename + "." + strkeyfieldname + " = " + strtablelang + "." + strkeyfieldname + " "
+                strsql += "WHERE " + strtablelang + ".LANG = 'fr' "
+                if stroldid != "":
+                    if id_is_numeric:
+                        strsql += "AND " + strtablename + "." + strkeyfieldname + " >= " + stroldid + " "
+                    else:
+                        stroldid_sql = str(stroldid).replace("'", "''")
+                        strsql += "AND " + strtablename + "." + strkeyfieldname + " >= '" + stroldid_sql + "' "
+                if strstartdatetimeprevious is not None and str(strstartdatetimeprevious).strip() != "":
+                    strstartdatetimeprevious = str(strstartdatetimeprevious).strip().replace("'", "''")
+                    strsql += "AND " + strtablename + ".TIM_UPDATED >= '" + strstartdatetimeprevious + "' "
+                strsql += "ORDER BY " + strtablename + "." + strkeyfieldname + " ASC "
+                try:
+                    cursor.execute(strsql)
+                except Exception:
+                    strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + "." + strtitlefielden + " AS ENGLISH_TITLE, " + strtablename + "." + stroriginal_language_field + ", " + strtablename + "." + stroriginal_title_field + ", " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + "." + strtitlefieldfr + " AS FRENCH_TITLE, " + strtablename + ".DELETED "
+                    strsql += "FROM " + strtablename + " "
+                    strsql += "LEFT JOIN " + strtablelang + " ON " + strtablename + "." + strkeyfieldname + " = " + strtablelang + "." + strkeyfieldname + " "
+                    strsql += "WHERE " + strtablelang + ".LANG = 'fr' "
+                    if stroldid != "":
+                        if id_is_numeric:
+                            strsql += "AND " + strtablename + "." + strkeyfieldname + " >= " + stroldid + " "
+                        else:
+                            stroldid_sql = str(stroldid).replace("'", "''")
+                            strsql += "AND " + strtablename + "." + strkeyfieldname + " >= '" + stroldid_sql + "' "
+                    strsql += "ORDER BY " + strtablename + "." + strkeyfieldname + " ASC "
+                    cursor.execute(strsql)
+                lngrowcount = cursor.rowcount
+                print(f"{lngrowcount} lines")
+                results = cursor.fetchall()
+                for row in results:
+                    lngentityid = row[strkeyfieldname]
+                    cp.f_setservervariable(strservervariablenameid, str(lngentityid), f"Current {strentityname} ID in the embedding update process", 0)
+                    strwikidataid = (row.get('ID_WIKIDATA') or '').strip()
+                    arrlanguage = {}
+                    arrtitle = {}
+                    arrlanguage['en'] = (row.get('ENGLISH_LANGUAGE') or '').strip()
+                    arrtitle['en'] = (row.get('ENGLISH_TITLE') or '').strip()
+                    arrlanguage['fr'] = (row.get('FRENCH_LANGUAGE') or '').strip()
+                    arrtitle['fr'] = (row.get('FRENCH_TITLE') or '').strip()
+                    strlang = (row.get(stroriginal_language_field) or '').strip()
+                    if strlang != "" and strlang not in arrlanguage:
+                        arrtitle[strlang] = (row.get(stroriginal_title_field) or '').strip()
+                        arrlanguage[strlang] = strlang
+                    intdeleted = row.get('DELETED', 0)
+                    if strwikidataid == "":
+                        intdeleted = 1
+
+                    for lang_code in arrlanguage.keys():
+                        if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
+                            strtitle = arrtitle[lang_code].strip()
+                            strlangcode = arrlanguage[lang_code].strip()
+                            strdocid = strentityname + "id_" + str(lngentityid) + "_" + strlangcode
+                            strfulldesc = strtitle
+
+                            existing_doc = chromacollection.get(ids=[strdocid])
+
+                            if intdeleted == 1:
+                                if existing_doc and len(existing_doc['ids']) > 0:
+                                    chromacollection.delete(ids=[strdocid])
+                                    print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} ({strlangcode}) -> DELETED")
+                                continue
+
+                            if existing_doc and len(existing_doc['ids']) > 0:
+                                strdoctext = existing_doc['documents'][0]
+                                if strdoctext == strfulldesc:
+                                    continue
+
+                            if check_duplicate_content_globally:
+                                try:
+                                    search_results = chromacollection.query(
+                                        query_texts=[strfulldesc],
+                                        n_results=1
+                                    )
+                                    if (
+                                        search_results.get("documents") and
+                                        len(search_results["documents"]) > 0 and
+                                        len(search_results["documents"][0]) > 0 and
+                                        str(search_results["documents"][0][0]).lower() == strfulldesc.lower()
+                                    ):
+                                        continue
+                                except Exception as e:
+                                    print(f"Warning: Could not check for existing content: {e}")
+                                    pass
+
+                            if existing_doc and len(existing_doc['ids']) > 0:
+                                chromacollection.update(
+                                    ids=[strdocid],
+                                    documents=[strfulldesc]
+                                )
+                                print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} ({strlangcode}) -> UPDATED")
+                            else:
+                                chromacollection.add(
+                                    ids=[strdocid],
+                                    documents=[strfulldesc]
+                                )
+                                print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} ({strlangcode}) -> ADDED")
+
+                print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
+                batch_size = 1000
+                offset = 0
+                lngdeletedcount = 0
+                lngnondeletedcount = 0
+                while True:
+                    results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    ids = results["ids"]
+                    if not ids:
+                        break
+                    for id in ids:
+                        parts = id.split('_')
+                        if len(parts) < 3:
+                            continue
+                        docentity = parts[0]
+                        docid = parts[1]
+                        doclang = parts[2]
+                        if docentity != strentityname + "id":
+                            continue
+                        if id_is_numeric:
+                            if not str(docid).isdigit():
+                                continue
+                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
+                        else:
+                            docid_sql = str(docid).replace("'", "''")
+                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = '" + docid_sql + "' "
+                        cursor.execute(strsql)
+                        lngrowcount = cursor.rowcount
+                        if lngrowcount == 0:
+                            chromacollection.delete(ids=[id])
+                            print(f"Deleted {id} ")
+                            lngdeletedcount += 1
+                        else:
+                            print(f"Not deleted {id} ")
+                            lngnondeletedcount += 1
+                    if len(ids) < batch_size:
+                        break
+                    offset += batch_size
+                print(f"Deleted {lngdeletedcount} {strentityname} docs")
+                print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
+                cp.f_setservervariable(strservervariablenamedeletereport, f"Deleted {lngdeletedcount} {strentityname} docs (enabled)", "", 0)
+                cp.f_setservervariable(strservervariablenamenotdeletereport, f"Not deleted {lngnondeletedcount} {strentityname} docs", "", 0)
+                cp.f_setservervariable(strservervariablenameid, "", f"Current {strentityname} ID in the embedding update process", 0)
+                cp.f_setservervariable(strservervariablenamestartdatetime, strprocessstartlocal, f"Date and time of the last start of the {strentityname} embedding update process", 0)
+
+            def f_process_single_language_entity_embeddings(*, strentityname, strentitycollection, strtablename, strkeyfieldname, stroldid, strnamefield, chromacollection, doclang="en", print_sql=False, force_update_id_leq=None):
+                """Sync single-language ChromaDB embeddings for an entity table.
+
+                Queries the database for rows updated since the last run (or from ``stroldid``),
+                then adds, updates, or deletes the corresponding ChromaDB document using a single
+                name field. After processing updates, sweeps the collection and removes stale
+                documents whose source row no longer exists in the database.
+
+                Simpler counterpart to ``f_process_bilingual_t2s_entity_embeddings`` for
+                entities that have only one language variant.
+
+                Args:
+                    strentityname: Short entity identifier used in doc IDs and server variables
+                        (e.g. ``"award"``).
+                    strentitycollection: Human-readable collection label for log messages.
+                    strtablename: Source database table name.
+                    strkeyfieldname: Primary-key column name in the source table.
+                    stroldid: Resume from this ID value (empty string to start from the
+                        beginning).
+                    strnamefield: Column name containing the entity name/text to embed.
+                    chromacollection: Target ChromaDB collection object.
+                    doclang: Language code stored in the document ID and metadata (default
+                        ``"en"``).
+                    print_sql: When ``True``, prints the generated SQL query before executing.
+                    force_update_id_leq: When set, forces a re-embedding for all entities with
+                        ID ≤ this value by ignoring the cached document text during comparison.
+                """
+                print("Create embeddings for the " + strentitycollection)
+
+                strservervariablenameid = strservervariableprefix + strentityname + "id"
+                strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
+                strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
+                strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
+
+                strstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime, 0)
+                strprocessstartlocal = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+                strsql = ""
+                strsql += "SELECT " + strkeyfieldname + ", " + strnamefield + ", DELETED "
+                strsql += "FROM " + strtablename + " "
+                if stroldid != "":
+                    strsql += "WHERE " + strkeyfieldname + " >= " + stroldid + " "
+                if strstartdatetimeprevious is not None and str(strstartdatetimeprevious).strip() != "":
+                    strstartdatetimeprevious = str(strstartdatetimeprevious).strip().replace("'", "''")
+                    if stroldid != "":
+                        strsql += "AND TIM_UPDATED >= '" + strstartdatetimeprevious + "' "
+                    else:
+                        strsql += "WHERE TIM_UPDATED >= '" + strstartdatetimeprevious + "' "
+                strsql += "ORDER BY " + strkeyfieldname + " ASC "
+                if print_sql:
+                    print(strsql)
+                try:
+                    cursor.execute(strsql)
+                except Exception:
+                    strsql = ""
+                    strsql += "SELECT " + strkeyfieldname + ", " + strnamefield + ", DELETED "
+                    strsql += "FROM " + strtablename + " "
+                    if stroldid != "":
+                        strsql += "WHERE " + strkeyfieldname + " >= " + stroldid + " "
+                    strsql += "ORDER BY " + strkeyfieldname + " ASC "
+                    if print_sql:
+                        print(strsql)
+                    cursor.execute(strsql)
+
+                lngrowcount = cursor.rowcount
+                print(f"{lngrowcount} lines")
+                results = cursor.fetchall()
+                for row in results:
+                    lngentityid = row[strkeyfieldname]
+                    cp.f_setservervariable(strservervariablenameid, str(lngentityid), f"Current {strentityname} ID in the embedding update process", 0)
+                    strname = (row.get(strnamefield) or "").strip()
+                    intdeleted = row.get('DELETED', 0)
+                    strdocid = strentityname + "id_" + str(lngentityid) + "_" + doclang
+                    strfulldesc = strname
+                    if len(strfulldesc) > max_chars:
+                        strfulldesc = strfulldesc[:max_chars] + "..."
+                    existing_doc = chromacollection.get(ids=[strdocid])
+                    if existing_doc and len(existing_doc['ids']) > 0:
+                        strdoctext = existing_doc['documents'][0]
+                        if force_update_id_leq is not None and lngentityid <= force_update_id_leq:
+                            strdoctext = ""
+                        if strdoctext == strfulldesc:
+                            continue
+                    if intdeleted == 1:
+                        if existing_doc and len(existing_doc['ids']) > 0:
+                            chromacollection.delete(ids=[strdocid])
+                            print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} -> DELETED")
+                            continue
+                    if existing_doc and len(existing_doc['ids']) > 0:
+                        chromacollection.update(
+                            ids=[strdocid],
+                            documents=[strfulldesc]
+                        )
+                        print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} -> UPDATED")
+                    else:
+                        chromacollection.add(
+                            ids=[strdocid],
+                            documents=[strfulldesc]
+                        )
+                        print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} -> ADDED")
+
+                print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
+                batch_size = 1000
+                offset = 0
+                lngdeletedcount = 0
+                lngnondeletedcount = 0
+                while True:
+                    results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    ids = results["ids"]
+                    if not ids:
+                        break
+                    for id in ids:
+                        parts = id.split('_')
+                        docentity = parts[0]
+                        docid = parts[1]
+                        doclang2 = parts[2]
+                        if docentity != strentityname + "id":
+                            continue
+                        strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
+                        cursor.execute(strsql)
+                        lngrowcount = cursor.rowcount
+                        if lngrowcount == 0:
+                            chromacollection.delete(ids=[id])
+                            print(f"Deleted {id} ")
+                            lngdeletedcount += 1
+                        else:
+                            print(f"Not deleted {id} ")
+                            lngnondeletedcount += 1
+                    if len(ids) < batch_size:
+                        break
+                    offset += batch_size
+                print(f"Deleted {lngdeletedcount} {strentityname} docs")
+                print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
+                cp.f_setservervariable(strservervariablenamedeletereport, f"Deleted {lngdeletedcount} {strentityname} docs (enabled)", "", 0)
+                cp.f_setservervariable(strservervariablenamenotdeletereport, f"Not deleted {lngnondeletedcount} {strentityname} docs", "", 0)
+                cp.f_setservervariable(strservervariablenameid, "", f"Current {strentityname} ID in the embedding update process", 0)
+                cp.f_setservervariable(strservervariablenamestartdatetime, strprocessstartlocal, f"Date and time of the last start of the {strentityname} embedding update process", 0)
+
+            #arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 207: 'character', 208: 'group', 209: 'location', 210: 'award'}
+            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
             strservervariablenametopicid = strservervariableprefix + "topic" + "id"
             strservervariablenamemovieid = strservervariableprefix + "movie" + "id"
             strservervariablenameserieid = strservervariableprefix + "serie" + "id"
@@ -163,6 +704,12 @@ try:
             strservervariablenamecharacterid = strservervariableprefix + "character" + "id"
             strservervariablenamegroupid = strservervariableprefix + "group" + "id"
             strservervariablenamelocationid = strservervariableprefix + "location" + "id"
+            strservervariablenameawardid = strservervariableprefix + "award" + "id"
+            strservervariablenamelistid = strservervariableprefix + "list" + "id"
+            strservervariablenamecollectionid = strservervariableprefix + "collection" + "id"
+            strservervariablenamemovementid = strservervariableprefix + "movement" + "id"
+            strservervariablenamedeathid = strservervariableprefix + "death" + "id"
+            strservervariablenamenominationid = strservervariableprefix + "nomination" + "id"
             strtopicidold = cp.f_getservervariable(strservervariablenametopicid,0)
             strmovieidold = cp.f_getservervariable(strservervariablenamemovieid,0)
             strserieidold = cp.f_getservervariable(strservervariablenameserieid,0)
@@ -172,30 +719,50 @@ try:
             strcharacteridold = cp.f_getservervariable(strservervariablenamecharacterid,0)
             strgroupidold = cp.f_getservervariable(strservervariablenamegroupid,0)
             strlocationidold = cp.f_getservervariable(strservervariablenamelocationid,0)
+            strawardidold = cp.f_getservervariable(strservervariablenameawardid,0)
+            strlistidold = cp.f_getservervariable(strservervariablenamelistid,0)
+            strcollectionidold = cp.f_getservervariable(strservervariablenamecollectionid,0)
+            strmovementidold = cp.f_getservervariable(strservervariablenamemovementid,0)
+            strdeathidold = cp.f_getservervariable(strservervariablenamedeathid,0)
+            strnominationidold = cp.f_getservervariable(strservervariablenamenominationid,0)
 
             strcurrentcontent = cp.f_getservervariable(strservervariablenamecurrentcontent,0)
             
             if strcurrentcontent == "movie":
-                arrprocessscope = {202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 209: 'location'}
+                arrprocessscope = {202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
             elif strcurrentcontent == "serie":
-                arrprocessscope = {203: 'serie', 204: 'person', 205: 'company', 206: 'network', 209: 'location'}
+                arrprocessscope = {203: 'serie', 204: 'person', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
             elif strcurrentcontent == "person":
-                arrprocessscope = {204: 'person', 205: 'company', 206: 'network', 209: 'location'}
+                arrprocessscope = {204: 'person', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
             elif strcurrentcontent == "company":
-                arrprocessscope = {205: 'company', 206: 'network', 209: 'location'}
+                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
             elif strcurrentcontent == "network":
-                arrprocessscope = {206: 'network', 209: 'location'}
+                arrprocessscope = {206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
+            elif strcurrentcontent == "group":
+                arrprocessscope = {208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
             elif strcurrentcontent == "location":
-                arrprocessscope = {209: 'location'}
+                arrprocessscope = {209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
+            elif strcurrentcontent == "award":
+                arrprocessscope = {210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
+            elif strcurrentcontent == "list":
+                arrprocessscope = {211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
+            elif strcurrentcontent == "collection":
+                arrprocessscope = {212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination'}
+            elif strcurrentcontent == "movement":
+                arrprocessscope = {213: 'movement', 214: 'death', 215: 'nomination'}
+            elif strcurrentcontent == "death":
+                arrprocessscope = {214: 'death', 215: 'nomination'}
+            elif strcurrentcontent == "nomination":
+                arrprocessscope = {215: 'nomination'}
             """
             elif strcurrentcontent == "character":
-                arrprocessscope = {207: 'character', 208: 'group'}
-            elif strcurrentcontent == "group":
-                arrprocessscope = {208: 'group'}
+                arrprocessscope = {207: 'character', 208: 'group', 209: 'location'}
             """
-            if strprocessstart.startswith('2026-03-03'):
-                # Tesing location embeddings update
-                arrprocessscope = {209: 'location'}
+            """ """
+            if strprocessstart.startswith('2026-03-29'):
+                # Testing nomination embeddings update
+                arrprocessscope = {215: 'nomination'}
+            """ """
             """
             # Fix to delete all movies with id like serieid* 
             print("Fix to delete all movies with id like serieid*")
@@ -229,142 +796,31 @@ try:
                     strentitycollection = "topics"
                     strtablename = "T_WC_T2S_TOPIC"
                     strkeyfieldname = "ID_TOPIC"
-                    print("Create embeddings for the " + strentitycollection)
+                    def f_topic_should_delete_row(row):
+                        """Return True if the topic embedding should be deleted.
 
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
+                        A topic with a combined movie+serie count of 1 or less is not
+                        considered meaningful and its embedding is removed from the collection.
+                        """
+                        lngmoviecount = row.get('MOVIE_COUNT', 0) or 0
+                        lngseriecount = row.get('SERIE_COUNT', 0) or 0
+                        return (lngmoviecount + lngseriecount) <= 1
 
-                    strtopicstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = ""
-                    strsql += "SELECT DISTINCT " + strkeyfieldname + ", ID_RECORD, 'en' AS ENGLISH_LANGUAGE, TOPIC_NAME AS ENGLISH_NAME, 'fr' AS FRENCH_LANGUAGE, TOPIC_NAME_FR AS FRENCH_NAME, OVERVIEW, TOPIC_TYPE, DELETED, MOVIE_COUNT, SERIE_COUNT "
-                    strsql += "FROM " + strtablename + " "
-                    if strtopicidold != "":
-                        strsql += "WHERE " + strkeyfieldname + " >= " + strtopicidold + " "
-                    if strtopicstartdatetimeprevious is not None and str(strtopicstartdatetimeprevious).strip() != "":
-                        strtopicstartdatetimeprevious = str(strtopicstartdatetimeprevious).strip().replace("'", "''")
-                        if strtopicidold != "":
-                            strsql += "AND TIM_UPDATED >= '" + strtopicstartdatetimeprevious + "' "
-                        else:
-                            strsql += "WHERE TIM_UPDATED >= '" + strtopicstartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = ""
-                        strsql += "SELECT DISTINCT " + strkeyfieldname + ", ID_RECORD, 'en' AS ENGLISH_LANGUAGE, TOPIC_NAME AS ENGLISH_NAME, 'fr' AS FRENCH_LANGUAGE, TOPIC_NAME_FR AS FRENCH_NAME, OVERVIEW, TOPIC_TYPE, DELETED, MOVIE_COUNT, SERIE_COUNT "
-                        strsql += "FROM " + strtablename + " "
-                        if strtopicidold != "":
-                            strsql += "WHERE " + strkeyfieldname + " >= " + strtopicidold + " "
-                        strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        lngtopicid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,str(lngtopicid),f"Current {strentityname} ID in the embedding update process",0)
-                        arrlanguage = {}
-                        arrtitle = {}
-                        arrlanguage['en'] = (row.get('ENGLISH_LANGUAGE') or '').strip()
-                        arrtitle['en'] = (row.get('ENGLISH_NAME') or '').strip()
-                        arrlanguage['fr'] = (row.get('FRENCH_LANGUAGE') or '').strip()
-                        arrtitle['fr'] = (row.get('FRENCH_NAME') or '').strip()
-
-                        strtopicoverview = (row.get('OVERVIEW') or '').strip()
-                        lngtopictype = row['TOPIC_TYPE']
-                        intdeleted = row['DELETED']
-                        lngmoviecount = row['MOVIE_COUNT']
-                        lngseriecount = row['SERIE_COUNT']
-                        lngelementcount = lngmoviecount + lngseriecount
-                        strtopicoverview = strtopicoverview.replace("\n", " ")
-
-                        # Process embeddings for each title in each language
-                        for lang_code in arrlanguage.keys():
-                            if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
-                                strtopictitle = arrtitle[lang_code].strip()
-                                strtopiclang = arrlanguage[lang_code].strip()
-                                strdocid = strentityname + "id_" + str(lngtopicid) + "_" + strtopiclang
-                                strtopicfulldesc = strtopictitle
-                                if strtopicoverview != "":
-                                    strtopicfulldesc += ": " + strtopicoverview
-                                if len(strtopicfulldesc) > max_chars:
-                                    strtopicfulldesc = strtopicfulldesc[:max_chars] + "..."
-
-                                # Check if the document content already exists in ChromaDB
-                                existing_doc = topics.get(ids=[strdocid])
-
-                                if intdeleted == 1 or lngelementcount <= 1:
-                                    # This document was deleted in the source database
-                                    # Or this topic has no element or a single element
-                                    # So we must delete it in ChromaDB
-                                    if existing_doc and len(existing_doc['ids']) > 0:
-                                        topics.delete(ids=[strdocid])
-                                        print(f"{strkeyfieldname}: {lngtopicid}, {strtopicfulldesc} ({strtopiclang}) -> DELETED")
-                                    continue
-
-                                if existing_doc and len(existing_doc['ids']) > 0:
-                                    strdoctext = existing_doc['documents'][0]
-                                    if strdoctext == strtopicfulldesc:
-                                        continue
-
-                                # Check if the document exists in ChromaDB
-                                if existing_doc and len(existing_doc['ids']) > 0:
-                                    topics.update(
-                                        ids=[strdocid],
-                                        documents=[strtopicfulldesc]  # New updated text
-                                    )
-                                    print(f"{strkeyfieldname}: {lngtopicid}, {strtopicfulldesc} ({strtopiclang}) -> UPDATED")
-                                else:
-                                    topics.add(
-                                        ids=[strdocid],
-                                        documents=[strtopicfulldesc]
-                                    )
-                                    print(f"{strkeyfieldname}: {lngtopicid}, {strtopicfulldesc} ({strtopiclang}) -> ADDED")
-                    # Now delete all topic embeddings that do not exist anymore in the T2S_TOPIC table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from topics
-                        results = topics.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                topics.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
+                    f_process_bilingual_t2s_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strtopicidold,
+                        strtitlefielden="TOPIC_NAME",
+                        strtitlefieldfr="TOPIC_NAME_FR",
+                        chromacollection=topics,
+                        stridrecordfield="ID_RECORD",
+                        extra_select_fields=["TOPIC_TYPE", "MOVIE_COUNT", "SERIE_COUNT"],
+                        should_delete_row=f_topic_should_delete_row,
+                        id_is_numeric=True,
+                        overview_field="OVERVIEW",
+                    )
                 elif intindex == 202:
                     # Create embeddings for the movies
                     strentityname = "movie"
@@ -372,159 +828,21 @@ try:
                     strtablename = "T_WC_T2S_MOVIE"
                     strtablelang = "T_WC_TMDB_MOVIE_LANG"
                     strkeyfieldname = "ID_MOVIE"
-                    print("Create embeddings for the " + strentitycollection)
-
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
-
-                    strmoviestartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + ".MOVIE_TITLE AS ENGLISH_TITLE, " + strtablename + ".ORIGINAL_LANGUAGE, " + strtablename + ".ORIGINAL_TITLE, " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + ".TITLE AS FRENCH_TITLE, " + strtablename + ".DELETED "
-                    strsql += "FROM " + strtablename + " "
-                    strsql += "LEFT JOIN " + strtablelang + " ON " + strtablename + "." + strkeyfieldname + " = " + strtablelang + "." + strkeyfieldname + " "
-                    strsql += "WHERE " + strtablelang + ".LANG = 'fr' "
-                    if strmovieidold != "":
-                        strsql += "AND " + strtablename + "." + strkeyfieldname + " >= " + strmovieidold + " "
-                    if strmoviestartdatetimeprevious is not None and str(strmoviestartdatetimeprevious).strip() != "":
-                        strmoviestartdatetimeprevious = str(strmoviestartdatetimeprevious).strip().replace("'", "''")
-                        strsql += "AND " + strtablename + ".TIM_UPDATED >= '" + strmoviestartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strtablename + "." + strkeyfieldname + " ASC "
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + ".MOVIE_TITLE AS ENGLISH_TITLE, " + strtablename + ".ORIGINAL_LANGUAGE, " + strtablename + ".ORIGINAL_TITLE, " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + ".TITLE AS FRENCH_TITLE, " + strtablename + ".DELETED "
-                        strsql += "FROM " + strtablename + " "
-                        strsql += "LEFT JOIN " + strtablelang + " ON " + strtablename + "." + strkeyfieldname + " = " + strtablelang + "." + strkeyfieldname + " "
-                        strsql += "WHERE " + strtablelang + ".LANG = 'fr' "
-                        if strmovieidold != "":
-                            strsql += "AND " + strtablename + "." + strkeyfieldname + " >= " + strmovieidold + " "
-                        strsql += "ORDER BY " + strtablename + "." + strkeyfieldname + " ASC "
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        lngmovieid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,str(lngmovieid),f"Current {strentityname} ID in the embedding update process",0)
-                        strwikidataid = row['ID_WIKIDATA'].strip()
-                        arrlanguage = {}
-                        arrtitle = {}
-                        arrlanguage['en'] = row['ENGLISH_LANGUAGE'].strip()
-                        arrtitle['en'] = row['ENGLISH_TITLE'].strip()
-                        arrlanguage['fr'] = row['FRENCH_LANGUAGE'].strip()
-                        arrtitle['fr'] = row['FRENCH_TITLE'].strip()
-                        strlang = row['ORIGINAL_LANGUAGE'].strip()
-                        if strlang != "" and strlang not in arrlanguage:
-                            arrtitle[strlang] = row['ORIGINAL_TITLE'].strip()
-                            arrlanguage[strlang] = strlang
-                        intdeleted = row['DELETED']
-                        if strwikidataid == "":
-                            # No Wikidata id, so we must delete it in ChromaDB
-                            intdeleted = 1
-                        
-                        # Process embeddings for each title in each language
-                        for lang_code in arrlanguage.keys():
-                            if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
-                                strmovietitle = arrtitle[lang_code].strip()
-                                strmovielang = arrlanguage[lang_code].strip()
-                                strdocid = strentityname + "id_" + str(lngmovieid) + "_" + strmovielang
-                                strmoviefulldesc = strmovietitle
-                                
-                                # Check if the document content already exists in ChromaDB
-                                # First check by ID
-                                existing_doc = movies.get(ids=[strdocid])
-                                
-                                if intdeleted == 1:
-                                    # This document was deleted in the source database
-                                    # So we must delete it in ChromaDB
-                                    if existing_doc and len(existing_doc['ids']) > 0:
-                                        movies.delete(ids=[strdocid])
-                                        print(f"{strkeyfieldname}: {lngmovieid}, {strmoviefulldesc} ({strmovielang}) -> DELETED")
-                                    continue
-                                
-                                if existing_doc and len(existing_doc['ids']) > 0:
-                                    strdoctext = existing_doc['documents'][0]
-                                    if strdoctext == strmoviefulldesc:
-                                        # This document was already processed to an embedding
-                                        # Nothing to do 
-                                        #print(f"{strkeyfieldname}: {lngmovieid}, {strmoviefulldesc} ({strmovielang}) -> ALREADY PROCESSED")
-                                        continue
-                                
-                                # Check if the content already exists anywhere in the collection (case-insensitive)
-                                try:
-                                    search_results = movies.query(
-                                        query_texts=[strmoviefulldesc],
-                                        n_results=1
-                                    )
-                                    if (search_results["documents"] and 
-                                        len(search_results["documents"][0]) > 0 and 
-                                        search_results["documents"][0][0].lower() == strmoviefulldesc.lower()):
-                                        #print(f"{strkeyfieldname}: {lngmovieid}, {strmoviefulldesc} ({strmovielang}) -> CONTENT ALREADY EXISTS")
-                                        continue
-                                except Exception as e:
-                                    # If query fails, continue with normal processing
-                                    print(f"Warning: Could not check for existing content: {e}")
-                                    pass
-                                
-                                # Check if the document exists in ChromaDB
-                                if existing_doc and len(existing_doc['ids']) > 0:
-                                    # If the document exists, update it
-                                    movies.update(
-                                        ids=[strdocid],
-                                        documents=[strmoviefulldesc]
-                                    )
-                                    print(f"{strkeyfieldname}: {lngmovieid}, {strmoviefulldesc} ({strmovielang}) -> UPDATED")
-                                else:
-                                    # If the document does not exist, add it
-                                    movies.add(
-                                        ids=[strdocid],
-                                        documents=[strmoviefulldesc]
-                                    )
-                                    print(f"{strkeyfieldname}: {lngmovieid}, {strmoviefulldesc} ({strmovielang}) -> ADDED")
-                    # Now delete all movie embeddings that do not exist anymore in the T2S_MOVIE table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from movies
-                        results = movies.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                movies.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
+                    f_process_en_fr_original_title_embeddings_from_lang_table(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strtablelang=strtablelang,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strmovieidold,
+                        chromacollection=movies,
+                        strtitlefielden="MOVIE_TITLE",
+                        strtitlefieldfr="TITLE",
+                        stroriginal_language_field="ORIGINAL_LANGUAGE",
+                        stroriginal_title_field="ORIGINAL_TITLE",
+                        id_is_numeric=True,
+                        check_duplicate_content_globally=True,
+                    )
                 elif intindex == 203:
                     # Create embeddings for the series
                     strentityname = "serie"
@@ -532,542 +850,71 @@ try:
                     strtablename = "T_WC_T2S_SERIE"
                     strtablelang = "T_WC_TMDB_SERIE_LANG"
                     strkeyfieldname = "ID_SERIE"
-                    print("Create embeddings for the " + strentitycollection)
-
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
-
-                    strseriestartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + ".SERIE_TITLE AS ENGLISH_TITLE, " + strtablename + ".ORIGINAL_LANGUAGE, " + strtablename + ".ORIGINAL_TITLE, " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + ".TITLE AS FRENCH_TITLE, " + strtablename + ".DELETED "
-                    strsql += "FROM " + strtablename + " "
-                    strsql += "LEFT JOIN " + strtablelang + " ON " + strtablename + "." + strkeyfieldname + " = " + strtablelang + "." + strkeyfieldname + " "
-                    strsql += "WHERE " + strtablelang + ".LANG = 'fr' "
-                    if strserieidold != "":
-                        strsql += "AND " + strtablename + "." + strkeyfieldname + " >= " + strserieidold + " "
-                    if strseriestartdatetimeprevious is not None and str(strseriestartdatetimeprevious).strip() != "":
-                        strseriestartdatetimeprevious = str(strseriestartdatetimeprevious).strip().replace("'", "''")
-                        strsql += "AND " + strtablename + ".TIM_UPDATED >= '" + strseriestartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strtablename + "." + strkeyfieldname + " ASC "
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + ".SERIE_TITLE AS ENGLISH_TITLE, " + strtablename + ".ORIGINAL_LANGUAGE, " + strtablename + ".ORIGINAL_TITLE, " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + ".TITLE AS FRENCH_TITLE, " + strtablename + ".DELETED "
-                        strsql += "FROM " + strtablename + " "
-                        strsql += "LEFT JOIN " + strtablelang + " ON " + strtablename + "." + strkeyfieldname + " = " + strtablelang + "." + strkeyfieldname + " "
-                        strsql += "WHERE " + strtablelang + ".LANG = 'fr' "
-                        if strserieidold != "":
-                            strsql += "AND " + strtablename + "." + strkeyfieldname + " >= " + strserieidold + " "
-                        strsql += "ORDER BY " + strtablename + "." + strkeyfieldname + " ASC "
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        lngserieid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,str(lngserieid),f"Current {strentityname} ID in the embedding update process",0)
-                        strwikidataid = row['ID_WIKIDATA'].strip()
-                        arrlanguage = {}
-                        arrtitle = {}
-                        arrlanguage['en'] = row['ENGLISH_LANGUAGE'].strip()
-                        arrtitle['en'] = row['ENGLISH_TITLE'].strip()
-                        arrlanguage['fr'] = row['FRENCH_LANGUAGE'].strip()
-                        arrtitle['fr'] = row['FRENCH_TITLE'].strip()
-                        strlang = row['ORIGINAL_LANGUAGE'].strip()
-                        if strlang != "" and strlang not in arrlanguage:
-                            arrtitle[strlang] = row['ORIGINAL_TITLE'].strip()
-                            arrlanguage[strlang] = strlang
-                        intdeleted = row['DELETED']
-                        if strwikidataid == "":
-                            # No Wikidata id, so we must delete it in ChromaDB
-                            intdeleted = 1
-                        
-                        # Process embeddings for each title in each language
-                        for lang_code in arrlanguage.keys():
-                            if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
-                                strserietitle = arrtitle[lang_code].strip()
-                                strserielang = arrlanguage[lang_code].strip()
-                                strdocid = strentityname + "id_" + str(lngserieid) + "_" + strserielang
-                                strseriefulldesc = strserietitle
-                                
-                                # Check if the document content already exists in ChromaDB
-                                # First check by ID
-                                existing_doc = series.get(ids=[strdocid])
-                                
-                                if intdeleted == 1:
-                                    # This document was deleted in the source database
-                                    # So we must delete it in ChromaDB
-                                    if existing_doc and len(existing_doc['ids']) > 0:
-                                        series.delete(ids=[strdocid])
-                                        print(f"{strkeyfieldname}: {lngserieid}, {strseriefulldesc} ({strserielang}) -> DELETED")
-                                    continue
-                                
-                                if existing_doc and len(existing_doc['ids']) > 0:
-                                    strdoctext = existing_doc['documents'][0]
-                                    if strdoctext == strseriefulldesc:
-                                        # This document was already processed to an embedding
-                                        # Nothing to do 
-                                        #print(f"{strkeyfieldname}: {lngmovieid}, {strmoviefulldesc} ({strmovielang}) -> ALREADY PROCESSED")
-                                        continue
-                                
-                                # Check if the content already exists anywhere in the collection (case-insensitive)
-                                try:
-                                    search_results = series.query(
-                                        query_texts=[strseriefulldesc],
-                                        n_results=1
-                                    )
-                                    if (search_results["documents"] and 
-                                        len(search_results["documents"][0]) > 0 and 
-                                        search_results["documents"][0][0].lower() == strseriefulldesc.lower()):
-                                        #print(f"{strkeyfieldname}: {lngserieid}, {strseriefulldesc} ({strserielang}) -> CONTENT ALREADY EXISTS")
-                                        continue
-                                except Exception as e:
-                                    # If query fails, continue with normal processing
-                                    print(f"Warning: Could not check for existing content: {e}")
-                                    pass
-                                
-                                # Check if the document exists in ChromaDB
-                                if existing_doc and len(existing_doc['ids']) > 0:
-                                    # If the document exists, update it
-                                    series.update(
-                                        ids=[strdocid],
-                                        documents=[strseriefulldesc]
-                                    )
-                                    print(f"{strkeyfieldname}: {lngserieid}, {strseriefulldesc} ({strserielang}) -> UPDATED")
-                                else:
-                                    # If the document does not exist, add it
-                                    series.add(
-                                        ids=[strdocid],
-                                        documents=[strseriefulldesc]
-                                    )
-                                    print(f"{strkeyfieldname}: {lngserieid}, {strseriefulldesc} ({strserielang}) -> ADDED")
-                    # Now delete all serie embeddings that do not exist anymore in the T2S_SERIE table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from series
-                        results = series.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                series.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
+                    f_process_en_fr_original_title_embeddings_from_lang_table(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strtablelang=strtablelang,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strserieidold,
+                        chromacollection=series,
+                        strtitlefielden="SERIE_TITLE",
+                        strtitlefieldfr="TITLE",
+                        stroriginal_language_field="ORIGINAL_LANGUAGE",
+                        stroriginal_title_field="ORIGINAL_TITLE",
+                        id_is_numeric=True,
+                        check_duplicate_content_globally=True,
+                    )
                 elif intindex == 204:
                     # Create embeddings for the persons
                     strentityname = "person"
                     strentitycollection = "persons"
                     strtablename = "T_WC_T2S_PERSON"
                     strkeyfieldname = "ID_PERSON"
-                    print("Create embeddings for the " + strentitycollection)
-
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
-
-                    strpersonstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = ""
-                    strsql += "SELECT " + strkeyfieldname + ", PERSON_NAME, DELETED "
-                    strsql += "FROM " + strtablename + " "
-                    if strpersonidold != "":
-                        strsql += "WHERE " + strkeyfieldname + " >= " + strpersonidold + " "
-                    if strpersonstartdatetimeprevious is not None and str(strpersonstartdatetimeprevious).strip() != "":
-                        strpersonstartdatetimeprevious = str(strpersonstartdatetimeprevious).strip().replace("'", "''")
-                        if strpersonidold != "":
-                            strsql += "AND TIM_UPDATED >= '" + strpersonstartdatetimeprevious + "' "
-                        else:
-                            strsql += "WHERE TIM_UPDATED >= '" + strpersonstartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = ""
-                        strsql += "SELECT " + strkeyfieldname + ", PERSON_NAME, DELETED "
-                        strsql += "FROM " + strtablename + " "
-                        if strpersonidold != "":
-                            strsql += "WHERE " + strkeyfieldname + " >= " + strpersonidold + " "
-                        strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        lngpersonid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,str(lngpersonid),f"Current {strentityname} ID in the embedding update process",0)
-                        strpersonname = row['PERSON_NAME'].strip()
-                        intdeleted = row['DELETED']
-                        strdocid = strentityname + "id_" + str(lngpersonid) + "_en"
-                        strpersonfulldesc = strpersonname
-                        if len(strpersonfulldesc) > max_chars:
-                            strpersonfulldesc = strpersonfulldesc[:max_chars] + "..."
-                        existing_doc = persons.get(ids=[strdocid])
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            strdoctext = existing_doc['documents'][0]
-                            if strdoctext == strpersonfulldesc:
-                                # This document was already processed to an embedding
-                                # Nothing to do 
-                                #print(f"{strkeyfieldname}: {lngpersonid}, {strpersonfulldesc} -> ALREADY PROCESSED")
-                                continue
-                        if intdeleted == 1:
-                            # This document was deleted in the source database
-                            # So we must delete it in ChromaDB
-                            if existing_doc and len(existing_doc['ids']) > 0:
-                                persons.delete(ids=[strdocid])
-                                print(f"{strkeyfieldname}: {lngpersonid}, {strpersonfulldesc} -> DELETED")
-                                continue
-                        # Check if the document exists in ChromaDB
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            # If the document exists, update it
-                            persons.update(
-                                ids=[strdocid],
-                                documents=[strpersonfulldesc]  # New updated text
-                            )
-                            print(f"{strkeyfieldname}: {lngpersonid}, {strpersonfulldesc} -> UPDATED")
-                        else:
-                            # If the document does not exist, add it
-                            persons.add(
-                                ids=[strdocid],
-                                documents=[strpersonfulldesc]
-                            )
-                            print(f"{strkeyfieldname}: {lngpersonid}, {strpersonfulldesc} -> ADDED")
-                    # Now delete all person embeddings that do not exist anymore in the T2S_PERSON table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from persons
-                        results = persons.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                persons.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
+                    f_process_single_language_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strpersonidold,
+                        strnamefield="PERSON_NAME",
+                        chromacollection=persons,
+                        doclang="en",
+                    )
                 elif intindex == 205:
                     # Create embeddings for the companies
                     strentityname = "company"
                     strentitycollection = "companies"
                     strtablename = "T_WC_T2S_COMPANY"
                     strkeyfieldname = "ID_COMPANY"
-                    print("Create embeddings for the " + strentitycollection)
-
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
-
-                    strcompanystartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = ""
-                    strsql += "SELECT " + strkeyfieldname + ", COMPANY_NAME, DELETED "
-                    strsql += "FROM " + strtablename + " "
-                    if strcompanyidold != "":
-                        strsql += "WHERE " + strkeyfieldname + " >= " + strcompanyidold + " "
-                    if strcompanystartdatetimeprevious is not None and str(strcompanystartdatetimeprevious).strip() != "":
-                        strcompanystartdatetimeprevious = str(strcompanystartdatetimeprevious).strip().replace("'", "''")
-                        if strcompanyidold != "":
-                            strsql += "AND TIM_UPDATED >= '" + strcompanystartdatetimeprevious + "' "
-                        else:
-                            strsql += "WHERE TIM_UPDATED >= '" + strcompanystartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                    print(strsql)
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = ""
-                        strsql += "SELECT " + strkeyfieldname + ", COMPANY_NAME, DELETED "
-                        strsql += "FROM " + strtablename + " "
-                        if strcompanyidold != "":
-                            strsql += "WHERE " + strkeyfieldname + " >= " + strcompanyidold + " "
-                        strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                        print(strsql)
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        lngcompanyid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,str(lngcompanyid),f"Current {strentityname} ID in the embedding update process",0)
-                        strcompanyname = row['COMPANY_NAME'].strip()
-                        intdeleted = row['DELETED']
-                        strdocid = strentityname + "id_" + str(lngcompanyid) + "_en"
-                        strcompanyfulldesc = strcompanyname
-                        if len(strcompanyfulldesc) > max_chars:
-                            strcompanyfulldesc = strcompanyfulldesc[:max_chars] + "..."
-                        """
-                        if lngcompanyid <= 60:
-                            companies.add(
-                                ids=[strdocid],
-                                documents=[strcompanyfulldesc]
-                            )
-                            print(f"{strkeyfieldname}: {lngcompanyid}, {strcompanyfulldesc} -> ADDED FORCED")
-                        """
-                        existing_doc = companies.get(ids=[strdocid])
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            strdoctext = existing_doc['documents'][0]
-
-
-                            """ Forcing update if the company ID is less than 60 """
-                            if lngcompanyid <= 60:
-                                strdoctext = "" 
-                            """ Forcing update if the company ID is less than 60 """
-
-                            
-                            if strdoctext == strcompanyfulldesc:
-                                # This document was already processed to an embedding
-                                # Nothing to do 
-                                #print(f"{strkeyfieldname}: {lngcompanyid}, {strcompanyfulldesc} -> ALREADY PROCESSED")
-                                continue
-                        if intdeleted == 1:
-                            # This document was deleted in the source database
-                            # So we must delete it in ChromaDB
-                            if existing_doc and len(existing_doc['ids']) > 0:
-                                companies.delete(ids=[strdocid])
-                                print(f"{strkeyfieldname}: {lngcompanyid}, {strcompanyfulldesc} -> DELETED")
-                                continue
-                        # Check if the document exists in ChromaDB
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            # If the document exists, update it
-                            companies.update(
-                                ids=[strdocid],
-                                documents=[strcompanyfulldesc]  # New updated text
-                            )
-                            print(f"{strkeyfieldname}: {lngcompanyid}, {strcompanyfulldesc} -> UPDATED")
-                        else:
-                            # If the document does not exist, add it
-                            companies.add(
-                                ids=[strdocid],
-                                documents=[strcompanyfulldesc]
-                            )
-                            print(f"{strkeyfieldname}: {lngcompanyid}, {strcompanyfulldesc} -> ADDED")
-                    # Now delete all company embeddings that do not exist anymore in the T2S_COMPANY table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from companies
-                        results = companies.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                companies.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
+                    f_process_single_language_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strcompanyidold,
+                        strnamefield="COMPANY_NAME",
+                        chromacollection=companies,
+                        doclang="en",
+                        print_sql=True,
+                        force_update_id_leq=60,
+                    )
                 elif intindex == 206:
                     # Create embeddings for the networks
-                    # But define some stuff first:
-                    # Populate the T2S_NETWORK table
                     strentityname = "network"
                     strentitycollection = "networks"
                     strtablename = "T_WC_T2S_NETWORK"
                     strkeyfieldname = "ID_NETWORK"
-                    print("Create embeddings for the " + strentitycollection)
-
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
-
-                    strnetworkstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = ""
-                    strsql += "SELECT " + strkeyfieldname + ", NETWORK_NAME, DELETED "
-                    strsql += "FROM " + strtablename + " "
-                    if strnetworkidold != "":
-                        strsql += "WHERE " + strkeyfieldname + " >= " + strnetworkidold + " "
-                    if strnetworkstartdatetimeprevious is not None and str(strnetworkstartdatetimeprevious).strip() != "":
-                        strnetworkstartdatetimeprevious = str(strnetworkstartdatetimeprevious).strip().replace("'", "''")
-                        if strnetworkidold != "":
-                            strsql += "AND TIM_UPDATED >= '" + strnetworkstartdatetimeprevious + "' "
-                        else:
-                            strsql += "WHERE TIM_UPDATED >= '" + strnetworkstartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = ""
-                        strsql += "SELECT " + strkeyfieldname + ", NETWORK_NAME, DELETED "
-                        strsql += "FROM " + strtablename + " "
-                        if strnetworkidold != "":
-                            strsql += "WHERE " + strkeyfieldname + " >= " + strnetworkidold + " "
-                        strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        lngnetworkid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,str(lngnetworkid),f"Current {strentityname} ID in the embedding update process",0)
-                        strnetworkname = row['NETWORK_NAME'].strip()
-                        intdeleted = row['DELETED']
-                        strdocid = strentityname + "id_" + str(lngnetworkid) + "_en"
-                        strnetworkfulldesc = strnetworkname
-                        if len(strnetworkfulldesc) > max_chars:
-                            strnetworkfulldesc = strnetworkfulldesc[:max_chars] + "..."
-                        existing_doc = networks.get(ids=[strdocid])
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            strdoctext = existing_doc['documents'][0]
-                            if strdoctext == strnetworkfulldesc:
-                                # This document was already processed to an embedding
-                                # Nothing to do 
-                                #print(f"{strkeyfieldname}: {lngnetworkid}, {strnetworkfulldesc} -> ALREADY PROCESSED")
-                                continue
-                        if intdeleted == 1:
-                            # This document was deleted in the source database
-                            # So we must delete it in ChromaDB
-                            if existing_doc and len(existing_doc['ids']) > 0:
-                                networks.delete(ids=[strdocid])
-                                print(f"{strkeyfieldname}: {lngnetworkid}, {strnetworkfulldesc} -> DELETED")
-                                continue
-                        # Check if the document exists in ChromaDB
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            # If the document exists, update it
-                            networks.update(
-                                ids=[strdocid],
-                                documents=[strnetworkfulldesc]  # New updated text
-                            )
-                            print(f"{strkeyfieldname}: {lngnetworkid}, {strnetworkfulldesc} -> UPDATED")
-                        else:
-                            # If the document does not exist, add it
-                            networks.add(
-                                ids=[strdocid],
-                                documents=[strnetworkfulldesc]
-                            )
-                            print(f"{strkeyfieldname}: {lngnetworkid}, {strnetworkfulldesc} -> ADDED")
-                    # Now delete all network embeddings that do not exist anymore in the T2S_NETWORK table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from networks
-                        results = networks.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                networks.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
+                    f_process_single_language_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strnetworkidold,
+                        strnamefield="NETWORK_NAME",
+                        chromacollection=networks,
+                        doclang="en",
+                    )
                 elif intindex == 1207:
                     # Create embeddings for the characters
                     # But define some stuff first:
@@ -1077,246 +924,102 @@ try:
                     strentitycollection = "characters"
                     strtablename = "T_WC_T2S_CHARACTER"
                     strkeyfieldname = "ID_CHARACTER"
-                    print("Create embeddings for the " + strentitycollection)
-
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
-
-                    strcharacterstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = ""
-                    strsql += "SELECT " + strkeyfieldname + ", CHARACTER_NAME, DELETED "
-                    strsql += "FROM " + strtablename + " "
-                    if strcharacteridold != "":
-                        strsql += "WHERE " + strkeyfieldname + " >= " + strcharacteridold + " "
-                    if strcharacterstartdatetimeprevious is not None and str(strcharacterstartdatetimeprevious).strip() != "":
-                        strcharacterstartdatetimeprevious = str(strcharacterstartdatetimeprevious).strip().replace("'", "''")
-                        if strcharacteridold != "":
-                            strsql += "AND TIM_UPDATED >= '" + strcharacterstartdatetimeprevious + "' "
-                        else:
-                            strsql += "WHERE TIM_UPDATED >= '" + strcharacterstartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = ""
-                        strsql += "SELECT " + strkeyfieldname + ", CHARACTER_NAME, DELETED "
-                        strsql += "FROM " + strtablename + " "
-                        if strcharacteridold != "":
-                            strsql += "WHERE " + strkeyfieldname + " >= " + strcharacteridold + " "
-                        strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        lngcharacterid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,str(lngcharacterid),f"Current {strentityname} ID in the embedding update process",0)
-                        strcharactername = row['CHARACTER_NAME'].strip()
-                        intdeleted = row['DELETED']
-                        strdocid = strentityname + "id_" + str(lngcharacterid) + "_en"
-                        strcharacterfulldesc = strcharactername
-                        if len(strcharacterfulldesc) > max_chars:
-                            strcharacterfulldesc = strcharacterfulldesc[:max_chars] + "..."
-                        existing_doc = characters.get(ids=[strdocid])
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            strdoctext = existing_doc['documents'][0]
-                            if strdoctext == strcharacterfulldesc:
-                                # This document was already processed to an embedding
-                                # Nothing to do 
-                                #print(f"{strkeyfieldname}: {lngcharacterid}, {strcharacterfulldesc} -> ALREADY PROCESSED")
-                                continue
-                        if intdeleted == 1:
-                            # This document was deleted in the source database
-                            # So we must delete it in ChromaDB
-                            if existing_doc and len(existing_doc['ids']) > 0:
-                                characters.delete(ids=[strdocid])
-                                print(f"{strkeyfieldname}: {lngcharacterid}, {strcharacterfulldesc} -> DELETED")
-                                continue
-                        # Check if the document exists in ChromaDB
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            # If the document exists, update it
-                            characters.update(
-                                ids=[strdocid],
-                                documents=[strcharacterfulldesc]  # New updated text
-                            )
-                            print(f"{strkeyfieldname}: {lngcharacterid}, {strcharacterfulldesc} -> UPDATED")
-                        else:
-                            # If the document does not exist, add it
-                            characters.add(
-                                ids=[strdocid],
-                                documents=[strcharacterfulldesc]
-                            )
-                            print(f"{strkeyfieldname}: {lngcharacterid}, {strcharacterfulldesc} -> ADDED")
-                    # Now delete all character embeddings that do not exist anymore in the T2S_CHARACTER table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from characters
-                        results = characters.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                characters.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
-                elif intindex == 1208:
+                    f_process_single_language_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strcharacteridold,
+                        strnamefield="CHARACTER_NAME",
+                        chromacollection=characters,
+                        doclang="en",
+                    )
+                elif intindex == 208:
                     # Create embeddings for the groups
-                    # But define some stuff first:
-                    # Create the T2S_GROUP table
-                    # Populate the T2S_GROUP table
-                    # Write the SQL query to get the groups
                     strentityname = "group"
                     strentitycollection = "groups"
                     strtablename = "T_WC_T2S_GROUP"
                     strkeyfieldname = "ID_GROUP"
-                    print("Create embeddings for the " + strentitycollection)
-
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
-
-                    strgroupstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = ""
-                    strsql += "SELECT " + strkeyfieldname + ", GROUP_NAME, DELETED "
-                    strsql += "FROM " + strtablename + " "
-                    if strgroupidold != "":
-                        strsql += "WHERE " + strkeyfieldname + " >= " + strgroupidold + " "
-                    if strgroupstartdatetimeprevious is not None and str(strgroupstartdatetimeprevious).strip() != "":
-                        strgroupstartdatetimeprevious = str(strgroupstartdatetimeprevious).strip().replace("'", "''")
-                        if strgroupidold != "":
-                            strsql += "AND TIM_UPDATED >= '" + strgroupstartdatetimeprevious + "' "
-                        else:
-                            strsql += "WHERE TIM_UPDATED >= '" + strgroupstartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = ""
-                        strsql += "SELECT " + strkeyfieldname + ", GROUP_NAME, DELETED "
-                        strsql += "FROM " + strtablename + " "
-                        if strgroupidold != "":
-                            strsql += "WHERE " + strkeyfieldname + " >= " + strgroupidold + " "
-                        strsql += "ORDER BY " + strkeyfieldname + " ASC "
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        lnggroupid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,str(lnggroupid),f"Current {strentityname} ID in the embedding update process",0)
-                        strgroupname = row['GROUP_NAME'].strip()
-                        intdeleted = row['DELETED']
-                        strdocid = strentityname + "id_" + str(lnggroupid) + "_en"
-                        strgroupfulldesc = strgroupname
-                        if len(strgroupfulldesc) > max_chars:
-                            strgroupfulldesc = strgroupfulldesc[:max_chars] + "..."
-                        existing_doc = groups.get(ids=[strdocid])
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            strdoctext = existing_doc['documents'][0]
-                            if strdoctext == strgroupfulldesc:
-                                # This document was already processed to an embedding
-                                # Nothing to do 
-                                #print(f"{strkeyfieldname}: {lnggroupid}, {strgroupfulldesc} -> ALREADY PROCESSED")
-                                continue
-                        if intdeleted == 1:
-                            # This document was deleted in the source database
-                            # So we must delete it in ChromaDB
-                            if existing_doc and len(existing_doc['ids']) > 0:
-                                groups.delete(ids=[strdocid])
-                                print(f"{strkeyfieldname}: {lnggroupid}, {strgroupfulldesc} -> DELETED")
-                                continue
-                        # Check if the document exists in ChromaDB
-                        if existing_doc and len(existing_doc['ids']) > 0:
-                            # If the document exists, update it
-                            groups.update(
-                                ids=[strdocid],
-                                documents=[strgroupfulldesc]  # New updated text
-                            )
-                            print(f"{strkeyfieldname}: {lnggroupid}, {strgroupfulldesc} -> UPDATED")
-                        else:
-                            # If the document does not exist, add it
-                            groups.add(
-                                ids=[strdocid],
-                                documents=[strgroupfulldesc]
-                            )
-                            print(f"{strkeyfieldname}: {lnggroupid}, {strgroupfulldesc} -> ADDED")
-                    # Now delete all group embeddings that do not exist anymore in the T2S_GROUP table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from groups
-                        results = groups.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldname + " FROM " + strtablename + " WHERE " + strkeyfieldname + " = " + docid + " "
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                groups.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
+                    f_process_bilingual_t2s_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strgroupidold,
+                        strtitlefielden="GROUP_NAME",
+                        strtitlefieldfr="GROUP_NAME_FR",
+                        chromacollection=groups,
+                        stridrecordfield=None,
+                        extra_metadata_fields={"id_wikidata": "ID_WIKIDATA"},
+                        id_is_numeric=False,
+                        overview_field=None,
+                    )
+                elif intindex == 210:
+                    # Create embeddings for the awards
+                    strentityname = "award"
+                    strentitycollection = "awards"
+                    strtablename = "T_WC_T2S_AWARD"
+                    strkeyfieldname = "ID_AWARD"
+                    f_process_bilingual_t2s_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strawardidold,
+                        strtitlefielden="AWARD_NAME",
+                        strtitlefieldfr="AWARD_NAME_FR",
+                        chromacollection=awards,
+                        stridrecordfield=None,
+                        extra_metadata_fields={"id_wikidata": "ID_WIKIDATA"},
+                    )
+                elif intindex == 211:
+                    # Create embeddings for the lists
+                    strentityname = "list"
+                    strentitycollection = "lists"
+                    strtablename = "T_WC_T2S_LIST"
+                    strkeyfieldname = "ID_T2S_LIST"
+                    f_process_bilingual_t2s_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strlistidold,
+                        strtitlefielden="LIST_NAME",
+                        strtitlefieldfr="LIST_NAME_FR",
+                        chromacollection=lists,
+                    )
+                elif intindex == 212:
+                    # Create embeddings for the collections
+                    strentityname = "collection"
+                    strentitycollection = "collections"
+                    strtablename = "T_WC_T2S_COLLECTION"
+                    strkeyfieldname = "ID_T2S_COLLECTION"
+                    f_process_bilingual_t2s_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strcollectionidold,
+                        strtitlefielden="COLLECTION_NAME",
+                        strtitlefieldfr="COLLECTION_NAME_FR",
+                        chromacollection=collections,
+                    )
+                elif intindex == 213:
+                    # Create embeddings for the movements
+                    strentityname = "movement"
+                    strentitycollection = "movements"
+                    strtablename = "T_WC_T2S_MOVEMENT"
+                    strkeyfieldname = "ID_MOVEMENT"
+                    f_process_bilingual_t2s_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strmovementidold,
+                        strtitlefielden="MOVEMENT_NAME",
+                        strtitlefieldfr="MOVEMENT_NAME_FR",
+                        chromacollection=movements,
+                    )
                 elif intindex == 209:
                     # Create embeddings for the locations (narrative location, filming location)
                     strentityname = "location"
@@ -1370,8 +1073,6 @@ try:
                         arrtitle['en'] = (row.get('ITEM_LABEL') or '').strip()
                         arrlanguage['fr'] = (row.get('FRENCH_LANGUAGE') or '').strip()
                         arrtitle['fr'] = (row.get('ITEM_LABEL_FR') or '').strip()
-
-                        strlocationname = arrtitle['en']
                         intdeleted = row.get('DELETED', 0)
                         # Process embeddings for each title in each language
                         for lang_code in arrlanguage.keys():
@@ -1458,7 +1159,49 @@ try:
                     cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
                     cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
 
-                if intindex == 209:
+                elif intindex == 214:
+                    # Create embeddings for the deaths
+                    strentityname = "death"
+                    strentitycollection = "deaths"
+                    strtablename = "T_WC_T2S_DEATH"
+                    strkeyfieldname = "ID_DEATH"
+                    f_process_bilingual_t2s_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strdeathidold,
+                        strtitlefielden="DEATH_NAME",
+                        strtitlefieldfr="DEATH_NAME_FR",
+                        chromacollection=deaths,
+                        stridrecordfield=None,
+                        extra_metadata_fields={"id_wikidata": "ID_WIKIDATA"},
+                        id_is_numeric=True,
+                        overview_field="OVERVIEW",
+                    )
+
+                elif intindex == 215:
+                    # Create embeddings for the nominations
+                    strentityname = "nomination"
+                    strentitycollection = "nominations"
+                    strtablename = "T_WC_T2S_NOMINATION"
+                    strkeyfieldname = "ID_NOMINATION"
+                    f_process_bilingual_t2s_entity_embeddings(
+                        strentityname=strentityname,
+                        strentitycollection=strentitycollection,
+                        strtablename=strtablename,
+                        strkeyfieldname=strkeyfieldname,
+                        stroldid=strnominationidold,
+                        strtitlefielden="NOMINATION_NAME",
+                        strtitlefieldfr="NOMINATION_NAME_FR",
+                        chromacollection=nominations,
+                        stridrecordfield=None,
+                        extra_metadata_fields={"id_wikidata": "ID_WIKIDATA"},
+                        id_is_numeric=True,
+                        overview_field="OVERVIEW",
+                    )
+
+                if intindex == 215:
                     # Last process is finished
                     cp.f_setservervariable(strservervariablenamecurrentcontent,"","Current content processed in the embedding update process",0)
             # Calculate total runtime and convert to readable format
