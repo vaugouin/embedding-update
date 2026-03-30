@@ -17,9 +17,16 @@ This repository contains a Python script, `embedding-update.py`, used to maintai
   - `persons`
   - `companies`
   - `networks`
-  - `characters`
+  - `characters` (collection exists but processing is currently disabled — see Processes)
   - `groups`
+  - `locations`
   - `anonymizedqueries`
+  - `awards`
+  - `nominations` (bilingual EN/FR; overview appended to text)
+  - `lists`
+  - `collections`
+  - `deaths` (bilingual EN/FR; overview appended to text)
+  - `movements`
 - **Iterates over entities** in the database and for each entity type:
   - Builds a stable document ID like `topicid_<ID>_<LANG>` or `movieid_<ID>_<LANG>`.
   - Creates or updates the corresponding document in ChromaDB.
@@ -102,13 +109,15 @@ At a high level, the script:
    - Currently processed entity kind (`strembeddingupdatecurrentcontent`)
    - Execution metadata and reports
 
-3. **Processes each entity type** (topics, movies, series, persons, companies, networks, etc.):
+3. **Processes each entity type** (topics, movies, series, persons, companies, networks, groups, locations, awards, lists, collections, movements):
    - Queries the corresponding table(s) via SQL.
-   - Builds the document text (e.g. topic name + overview, or movie/series titles in different languages), truncated to stay inside OpenAI embedding limits.
+   - Builds the document text (e.g. topic name + overview, or movie/series titles in different languages), truncated to stay inside OpenAI embedding limits (~32 000 characters).
    - Uses consistent ID patterns to identify documents in ChromaDB.
    - For **deleted or invalid records**, removes corresponding documents from ChromaDB.
    - For **existing records**, compares content and updates the document if it changed.
    - For **new records**, adds documents so ChromaDB can generate embeddings.
+   - **Locations** are handled via a custom implementation: Wikidata items are fetched by joining `T_WC_WIKIDATA_ITEM_PROPERTY` (filtered on properties P840 — narrative location — and P915 — filming location) with `T_WC_T2S_ITEM`. Location document IDs use the Wikidata item ID (string) rather than a numeric primary key.
+   - **Topics** include an extra deletion criterion: topics associated with only one movie or series have their embeddings removed.
 
 4. **Cleans up orphaned embeddings**
    - Iterates over IDs in each collection.
@@ -142,11 +151,20 @@ The script prints progress information (entity counts, added/updated/deleted doc
 
 Each collection uses a consistent document ID pattern:
 
-- Topics: `topicid_<ID_TOPIC>_<LANG>`
-- Movies: `movieid_<ID_MOVIE>_<LANG>`
-- Series: `serieid_<ID_SERIE>_<LANG>`
-- Persons: `personid_<ID_PERSON>_<LANG>` (when used)
-- Other entity types follow the same `nameid_<ID>_<LANG>` pattern.
+- Topics: `topicid_<ID_TOPIC>_<LANG>` (bilingual EN/FR; overview appended to text)
+- Movies: `movieid_<ID_MOVIE>_<LANG>` (EN, FR, and original language)
+- Series: `serieid_<ID_SERIE>_<LANG>` (EN, FR, and original language)
+- Persons: `personid_<ID_PERSON>_<LANG>` (single-language, English)
+- Companies: `companyid_<ID_COMPANY>_<LANG>` (single-language, English)
+- Networks: `networkid_<ID_NETWORK>_<LANG>` (single-language, English)
+- Groups: `groupid_<ID_GROUP>_<LANG>` (bilingual EN/FR; non-numeric Wikidata-based ID)
+- Locations: `locationid_<ID_ITEM>_<LANG>` (bilingual EN/FR; `ID_ITEM` is a Wikidata string ID, e.g. `Q84`)
+- Awards: `awardid_<ID_AWARD>_<LANG>` (bilingual EN/FR)
+- Lists: `listid_<ID_T2S_LIST>_<LANG>` (bilingual EN/FR)
+- Collections: `collectionid_<ID_T2S_COLLECTION>_<LANG>` (bilingual EN/FR)
+- Movements: `movementid_<ID_MOVEMENT>_<LANG>` (bilingual EN/FR)
+- Deaths: `deathid_<ID_DEATH>_<LANG>` (bilingual EN/FR; overview appended to text)
+- Nominations: `nominationid_<ID_NOMINATION>_<LANG>` (bilingual EN/FR; overview appended to text)
 
 This convention allows the script to:
 
@@ -154,8 +172,32 @@ This convention allows the script to:
 - Delete documents when the DB row is deleted
 - Resume processing from the last known ID
 
+## Processes
+
+The script runs one or more entity-specific processes selected via internal routing (stored in server variables) and executed as an ordered `process_id -> entity_name` mapping.
+
+Current process IDs include:
+
+| ID | Entity | Notes |
+|----|--------|-------|
+| 201 | topics | Bilingual EN/FR; deleted if movie+serie count ≤ 1 |
+| 202 | movies | EN, FR, and original language via lang table |
+| 203 | series | EN, FR, and original language via lang table |
+| 204 | persons | Single-language (English) |
+| 205 | companies | Single-language (English) |
+| 206 | networks | Single-language (English) |
+| 207 | ~~characters~~ | **Currently disabled** (mapped to 1207 in routing) |
+| 208 | groups | Bilingual EN/FR; non-numeric Wikidata ID |
+| 209 | locations | Bilingual EN/FR; custom join on `T_WC_WIKIDATA_ITEM_PROPERTY` filtered on P840 (narrative) and P915 (filming); Wikidata string ID |
+| 210 | awards | Bilingual EN/FR |
+| 211 | lists | Bilingual EN/FR |
+| 212 | collections | Bilingual EN/FR |
+| 213 | movements | Bilingual EN/FR |
+| 214 | deaths | Bilingual EN/FR; overview appended to text; Wikidata ID stored in metadata |
+| 215 | nominations | Bilingual EN/FR; overview appended to text; Wikidata ID stored in metadata |
+
 ## Notes
 
 - The script is optimized to avoid re-embedding unchanged content.
 - There are commented blocks for special maintenance operations (e.g. batch deletes); those are not executed in normal runs.
-- If you modify the schema, collection names, or ID patterns, ensure you update `embedding-update.py` accordingly.
+ - If you modify the schema, collection names, or ID patterns, ensure you update `embedding-update.py` accordingly.
