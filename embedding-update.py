@@ -465,12 +465,17 @@ try:
                     if strwikidataid == "":
                         intdeleted = 1
 
+                    strfirstlangfulldesc = None
                     for lang_code in arrlanguage.keys():
                         if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
                             strtitle = arrtitle[lang_code].strip()
                             strlangcode = arrlanguage[lang_code].strip()
                             strdocid = strentityname + "id_" + str(lngentityid) + "_" + strlangcode
                             strfulldesc = strtitle
+                            if strfirstlangfulldesc is None:
+                                strfirstlangfulldesc = strfulldesc
+                            elif strfulldesc == strfirstlangfulldesc:
+                                continue
 
                             existing_doc = chromacollection.get(ids=[strdocid])
 
