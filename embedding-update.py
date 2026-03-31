@@ -267,6 +267,7 @@ try:
                         stroverview = stroverview.replace("\n", " ")
                     intdeleted = row.get('DELETED', 0)
 
+                    strfirstlangfulldesc = None
                     for lang_code in arrlanguage.keys():
                         if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
                             strdocid = strentityname + "id_" + str(lngentityid) + "_" + lang_code
@@ -275,6 +276,10 @@ try:
                                 strfulldesc += ": " + stroverview
                             if len(strfulldesc) > max_chars:
                                 strfulldesc = strfulldesc[:max_chars] + "..."
+                            if strfirstlangfulldesc is None:
+                                strfirstlangfulldesc = strfulldesc
+                            elif strfulldesc == strfirstlangfulldesc:
+                                continue
                             print(strfulldesc)
 
                             existing_doc = chromacollection.get(ids=[strdocid])
@@ -460,12 +465,17 @@ try:
                     if strwikidataid == "":
                         intdeleted = 1
 
+                    strfirstlangfulldesc = None
                     for lang_code in arrlanguage.keys():
                         if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
                             strtitle = arrtitle[lang_code].strip()
                             strlangcode = arrlanguage[lang_code].strip()
                             strdocid = strentityname + "id_" + str(lngentityid) + "_" + strlangcode
                             strfulldesc = strtitle
+                            if strfirstlangfulldesc is None:
+                                strfirstlangfulldesc = strfulldesc
+                            elif strfulldesc == strfirstlangfulldesc:
+                                continue
 
                             existing_doc = chromacollection.get(ids=[strdocid])
 
@@ -626,6 +636,8 @@ try:
                     lngentityid = row[strkeyfieldname]
                     cp.f_setservervariable(strservervariablenameid, str(lngentityid), f"Current {strentityname} ID in the embedding update process", 0)
                     strname = (row.get(strnamefield) or "").strip()
+                    if strname == "":
+                        continue
                     intdeleted = row.get('DELETED', 0)
                     strdocid = strentityname + "id_" + str(lngentityid) + "_" + doclang
                     strfulldesc = strname
@@ -1075,12 +1087,17 @@ try:
                         arrtitle['fr'] = (row.get('ITEM_LABEL_FR') or '').strip()
                         intdeleted = row.get('DELETED', 0)
                         # Process embeddings for each title in each language
+                        strfirstlangfulldesc = None
                         for lang_code in arrlanguage.keys():
                             if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
                                 strdocid = strentityname + "id_" + strlocationid + "_" + lang_code
                                 strlocationfulldesc = arrtitle[lang_code]
                                 if len(strlocationfulldesc) > max_chars:
                                     strlocationfulldesc = strlocationfulldesc[:max_chars] + "..."
+                                if strfirstlangfulldesc is None:
+                                    strfirstlangfulldesc = strlocationfulldesc
+                                elif strlocationfulldesc == strfirstlangfulldesc:
+                                    continue
                                 print(strlocationfulldesc)
                                 # Check if the document exists in ChromaDB
                                 existing_doc = locations.get(ids=[strdocid])
