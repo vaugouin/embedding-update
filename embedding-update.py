@@ -636,6 +636,8 @@ try:
                     lngentityid = row[strkeyfieldname]
                     cp.f_setservervariable(strservervariablenameid, str(lngentityid), f"Current {strentityname} ID in the embedding update process", 0)
                     strname = (row.get(strnamefield) or "").strip()
+                    if strname == "":
+                        continue
                     intdeleted = row.get('DELETED', 0)
                     strdocid = strentityname + "id_" + str(lngentityid) + "_" + doclang
                     strfulldesc = strname
