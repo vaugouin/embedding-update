@@ -1085,12 +1085,17 @@ try:
                         arrtitle['fr'] = (row.get('ITEM_LABEL_FR') or '').strip()
                         intdeleted = row.get('DELETED', 0)
                         # Process embeddings for each title in each language
+                        strfirstlangfulldesc = None
                         for lang_code in arrlanguage.keys():
                             if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
                                 strdocid = strentityname + "id_" + strlocationid + "_" + lang_code
                                 strlocationfulldesc = arrtitle[lang_code]
                                 if len(strlocationfulldesc) > max_chars:
                                     strlocationfulldesc = strlocationfulldesc[:max_chars] + "..."
+                                if strfirstlangfulldesc is None:
+                                    strfirstlangfulldesc = strlocationfulldesc
+                                elif strlocationfulldesc == strfirstlangfulldesc:
+                                    continue
                                 print(strlocationfulldesc)
                                 # Check if the document exists in ChromaDB
                                 existing_doc = locations.get(ids=[strdocid])
