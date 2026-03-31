@@ -267,6 +267,7 @@ try:
                         stroverview = stroverview.replace("\n", " ")
                     intdeleted = row.get('DELETED', 0)
 
+                    strfirstlangfulldesc = None
                     for lang_code in arrlanguage.keys():
                         if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
                             strdocid = strentityname + "id_" + str(lngentityid) + "_" + lang_code
@@ -275,6 +276,10 @@ try:
                                 strfulldesc += ": " + stroverview
                             if len(strfulldesc) > max_chars:
                                 strfulldesc = strfulldesc[:max_chars] + "..."
+                            if strfirstlangfulldesc is None:
+                                strfirstlangfulldesc = strfulldesc
+                            elif strfulldesc == strfirstlangfulldesc:
+                                continue
                             print(strfulldesc)
 
                             existing_doc = chromacollection.get(ids=[strdocid])
