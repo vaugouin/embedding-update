@@ -122,9 +122,10 @@ anonymizedqueries = chroma_client.get_or_create_collection(
 )
 
 try:
-    with cp.connectioncp:
-        with cp.connectioncp.cursor() as cursor:
-            cursor2 = cp.connectioncp.cursor()
+    conn = cp.f_getconnection()
+    with conn:
+        with conn.cursor() as cursor:
+            cursor2 = conn.cursor()
             # Start timing the script execution
             start_time = time.time()
             strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -1228,5 +1229,7 @@ try:
             cp.f_setservervariable(strservervariablenametotalruntime,readable_duration,strtotalruntimedesc,0)
             print(f"Total runtime: {strtotalruntime} seconds ({readable_duration})")
 except pymysql.MySQLError as e:
-    print(f"? MySQL Error: {e}")
-    cp.connectioncp.rollback()
+    print(f"❌ MySQL Error: {e}")
+    conn = getattr(cp, "connectioncp", None)
+    if conn is not None and getattr(conn, "open", False):
+        conn.rollback()

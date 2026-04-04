@@ -1,2 +1,2 @@
-mv embedding-update-old.sh embedding-update.sh 
+mv embedding-update-off.sh embedding-update.sh 
 
