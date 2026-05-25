@@ -9,7 +9,7 @@ else
     mkdir -p $HOME/docker/shared_data
     cd $HOME/docker/embedding-update
     docker build -t embedding-update-python-app .
-    # docker run -it --rm --network="host" --name embedding-update embedding-update-python-app
-    docker run -d --rm --network="host" --name embedding-update embedding-update-python-app
+    # docker run -it --rm --network="host" --env-file /home/debian/docker/embedding-update/.env --name embedding-update embedding-update-python-app
+    docker run -d --rm --network="host" --env-file /home/debian/docker/embedding-update/.env --name embedding-update embedding-update-python-app
     echo "embedding-update Docker container started."
 fi
