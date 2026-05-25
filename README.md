@@ -147,6 +147,17 @@ Before running, ensure that:
 
 The script prints progress information (entity counts, added/updated/deleted documents) to stdout. It is intended to be run as a backend maintenance task rather than a user-facing application.
 
+## Running with Docker
+
+Do not include local `.env` files in the Docker build context or copy them into the image. The project `.dockerignore` excludes `.env` files so they cannot be baked into image layers, build cache, or registries.
+
+Keep runtime environment files outside the app source tree and pass them to the container with Docker's `--env-file` option:
+
+```bash
+docker build -t embedding-update-python-app .
+docker run -d --rm --network="host" --env-file /home/debian/docker/embedding-update/.env --name embedding-update embedding-update-python-app
+```
+
 ## Collections and ID conventions
 
 Each collection uses a consistent document ID pattern:
