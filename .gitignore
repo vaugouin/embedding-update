@@ -40,3 +40,6 @@ local_chromadb_topics_en/
 Thumbs.db
 
 citizenphilsecrets.py
+
+# Claude Code local tooling
+.claude/
