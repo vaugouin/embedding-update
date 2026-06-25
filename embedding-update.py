@@ -12,6 +12,25 @@ import citizenphil as cp
 from datetime import datetime, timedelta
 import time
 
+def f_logmemory(strlabel=""):
+    """Print host RAM + swap state for crash diagnostics.
+
+    Runs inside the container, but with no cgroup memory limit set psutil
+    reports host-wide figures. Used to document HNSW load failures, which on
+    this VPS stem from RAM exhaustion (index must fit entirely in RAM) rather
+    than on-disk corruption.
+    """
+    try:
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        print(
+            f"[MEM] {strlabel} | RAM available {mem.available / 1024**3:.2f} GiB / "
+            f"{mem.total / 1024**3:.2f} GiB ({mem.percent:.0f}% used) | "
+            f"swap free {swap.free / 1024**3:.2f} GiB / {swap.total / 1024**3:.2f} GiB"
+        )
+    except Exception as exc:
+        print(f"[MEM] {strlabel} | memory probe failed: {exc}")
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -330,12 +349,23 @@ try:
                                 print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} -> ADDED")
 
                 print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
+                f_logmemory(f"before {strentityname} cleanup")
+                try:
+                    lngcollectioncount = chromacollection.count()
+                    print(f"{strentityname} collection holds {lngcollectioncount} docs")
+                except Exception as exc:
+                    print(f"Could not count {strentityname} collection: {exc}")
                 batch_size = 1000
                 offset = 0
                 lngdeletedcount = 0
                 lngnondeletedcount = 0
                 while True:
-                    results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    try:
+                        results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    except Exception as exc:
+                        print(f"[CHROMA] get() failed on {strentityname} at offset {offset}: {exc}")
+                        f_logmemory(f"at {strentityname} get() failure")
+                        raise
                     ids = results["ids"]
                     if not ids:
                         break
@@ -374,7 +404,7 @@ try:
                 cp.f_setservervariable(strservervariablenameid, "", f"Current {strentityname} ID in the embedding update process", 0)
                 cp.f_setservervariable(strservervariablenamestartdatetime, strprocessstartlocal, f"Date and time of the last start of the {strentityname} embedding update process", 0)
 
-            def f_process_en_fr_original_title_embeddings_from_lang_table(*, strentityname, strentitycollection, strtablename, strtablelang, strkeyfieldname, stroldid, chromacollection, strtitlefielden, strtitlefieldfr, stroriginal_language_field, stroriginal_title_field, id_is_numeric=True, check_duplicate_content_globally=True):
+            def f_process_en_fr_original_title_embeddings_from_lang_table(*, strentityname, strentitycollection, strtablename, strtablelang, strkeyfieldname, stroldid, chromacollection, strtitlefielden, strtitlefieldfr, stroriginal_language_field, stroriginal_title_field, stryearfield=None, id_is_numeric=True, check_duplicate_content_globally=True):
                 """Sync EN, FR, and original-language ChromaDB embeddings using a joined language table.
 
                 Queries the main entity table joined with a separate language/translation table
@@ -416,7 +446,14 @@ try:
                 strstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime, 0)
                 strprocessstartlocal = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-                strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + "." + strtitlefielden + " AS ENGLISH_TITLE, " + strtablename + "." + stroriginal_language_field + ", " + strtablename + "." + stroriginal_title_field + ", " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + "." + strtitlefieldfr + " AS FRENCH_TITLE, " + strtablename + ".DELETED "
+                # Optional numeric metadata (e.g. RELEASE_YEAR for movies) added to each
+                # ChromaDB doc so the resolver can disambiguate same-title entities with a
+                # year filter. Selected as YEAR_VALUE; left out entirely when not requested.
+                stryearselect = ""
+                if stryearfield:
+                    stryearselect = ", " + strtablename + "." + stryearfield + " AS YEAR_VALUE "
+
+                strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + "." + strtitlefielden + " AS ENGLISH_TITLE, " + strtablename + "." + stroriginal_language_field + ", " + strtablename + "." + stroriginal_title_field + ", " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + "." + strtitlefieldfr + " AS FRENCH_TITLE, " + strtablename + ".DELETED " + stryearselect
                 strsql += "FROM " + strtablename + " "
                 strsql += "LEFT JOIN " + strtablelang + " ON " + strtablename + "." + strkeyfieldname + " = " + strtablelang + "." + strkeyfieldname + " "
                 strsql += "WHERE " + strtablelang + ".LANG = 'fr' "
@@ -433,7 +470,7 @@ try:
                 try:
                     cursor.execute(strsql)
                 except Exception:
-                    strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + "." + strtitlefielden + " AS ENGLISH_TITLE, " + strtablename + "." + stroriginal_language_field + ", " + strtablename + "." + stroriginal_title_field + ", " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + "." + strtitlefieldfr + " AS FRENCH_TITLE, " + strtablename + ".DELETED "
+                    strsql = "SELECT DISTINCT " + strtablename + "." + strkeyfieldname + ", " + strtablename + ".ID_WIKIDATA, 'en' AS ENGLISH_LANGUAGE, " + strtablename + "." + strtitlefielden + " AS ENGLISH_TITLE, " + strtablename + "." + stroriginal_language_field + ", " + strtablename + "." + stroriginal_title_field + ", " + strtablelang + ".LANG AS FRENCH_LANGUAGE, " + strtablelang + "." + strtitlefieldfr + " AS FRENCH_TITLE, " + strtablename + ".DELETED " + stryearselect
                     strsql += "FROM " + strtablename + " "
                     strsql += "LEFT JOIN " + strtablelang + " ON " + strtablename + "." + strkeyfieldname + " = " + strtablelang + "." + strkeyfieldname + " "
                     strsql += "WHERE " + strtablelang + ".LANG = 'fr' "
@@ -452,6 +489,13 @@ try:
                     lngentityid = row[strkeyfieldname]
                     cp.f_setservervariable(strservervariablenameid, str(lngentityid), f"Current {strentityname} ID in the embedding update process", 0)
                     strwikidataid = (row.get('ID_WIKIDATA') or '').strip()
+                    metadata_year = None
+                    if stryearfield:
+                        try:
+                            _yr = row.get('YEAR_VALUE')
+                            metadata_year = int(_yr) if _yr is not None else None
+                        except (TypeError, ValueError):
+                            metadata_year = None
                     arrlanguage = {}
                     arrtitle = {}
                     arrlanguage['en'] = (row.get('ENGLISH_LANGUAGE') or '').strip()
@@ -508,26 +552,42 @@ try:
                                     print(f"Warning: Could not check for existing content: {e}")
                                     pass
 
+                            # Attach year metadata only when available (ChromaDB rejects None);
+                            # documents are passed too, so this doc is (re)embedded as before.
+                            extra_kwargs = {"metadatas": [{"year": metadata_year}]} if metadata_year is not None else {}
                             if existing_doc and len(existing_doc['ids']) > 0:
                                 chromacollection.update(
                                     ids=[strdocid],
-                                    documents=[strfulldesc]
+                                    documents=[strfulldesc],
+                                    **extra_kwargs
                                 )
                                 print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} ({strlangcode}) -> UPDATED")
                             else:
                                 chromacollection.add(
                                     ids=[strdocid],
-                                    documents=[strfulldesc]
+                                    documents=[strfulldesc],
+                                    **extra_kwargs
                                 )
                                 print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} ({strlangcode}) -> ADDED")
 
                 print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
+                f_logmemory(f"before {strentityname} cleanup")
+                try:
+                    lngcollectioncount = chromacollection.count()
+                    print(f"{strentityname} collection holds {lngcollectioncount} docs")
+                except Exception as exc:
+                    print(f"Could not count {strentityname} collection: {exc}")
                 batch_size = 1000
                 offset = 0
                 lngdeletedcount = 0
                 lngnondeletedcount = 0
                 while True:
-                    results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    try:
+                        results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    except Exception as exc:
+                        print(f"[CHROMA] get() failed on {strentityname} at offset {offset}: {exc}")
+                        f_logmemory(f"at {strentityname} get() failure")
+                        raise
                     ids = results["ids"]
                     if not ids:
                         break
@@ -670,12 +730,23 @@ try:
                         print(f"{strkeyfieldname}: {lngentityid}, {strfulldesc} -> ADDED")
 
                 print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
+                f_logmemory(f"before {strentityname} cleanup")
+                try:
+                    lngcollectioncount = chromacollection.count()
+                    print(f"{strentityname} collection holds {lngcollectioncount} docs")
+                except Exception as exc:
+                    print(f"Could not count {strentityname} collection: {exc}")
                 batch_size = 1000
                 offset = 0
                 lngdeletedcount = 0
                 lngnondeletedcount = 0
                 while True:
-                    results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    try:
+                        results = chromacollection.get(include=[], limit=batch_size, offset=offset)
+                    except Exception as exc:
+                        print(f"[CHROMA] get() failed on {strentityname} at offset {offset}: {exc}")
+                        f_logmemory(f"at {strentityname} get() failure")
+                        raise
                     ids = results["ids"]
                     if not ids:
                         break
@@ -853,6 +924,7 @@ try:
                         strtitlefieldfr="TITLE",
                         stroriginal_language_field="ORIGINAL_LANGUAGE",
                         stroriginal_title_field="ORIGINAL_TITLE",
+                        stryearfield="RELEASE_YEAR",
                         id_is_numeric=True,
                         check_duplicate_content_globally=True,
                     )
