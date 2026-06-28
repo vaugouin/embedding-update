@@ -43,3 +43,6 @@ citizenphilsecrets.py
 
 # Claude Code local tooling
 .claude/
+
+# Claude Code / agent local tooling
+.agents/
