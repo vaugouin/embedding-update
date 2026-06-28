@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# Ensure ChromaDB is healthy before starting the embedding update. The job
+# connects to Chroma at import time and crashes immediately if it is down, so
+# recover it first (or skip cleanly rather than emit a traceback).
+if ! bash "$HOME/docker/chromadb/chromadb-ensure.sh"; then
+    echo "ChromaDB unavailable and could not be recovered — skipping embedding-update run."
+    exit 1
+fi
+
 # Check if the embedding-update Docker container is running
 if [ $(docker ps -q -f name=embedding-update) ]; then
     echo "embedding-update Docker container is already running."

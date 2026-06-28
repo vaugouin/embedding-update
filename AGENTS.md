@@ -13,6 +13,24 @@ Deeper specs live in their own files:
 
 ---
 
+## Related repositories (project ecosystem)
+
+`embedding-update` is one stage of **Agent BBB**, a multi-repository movie/TV database system owned by GitHub user `vaugouin`. All sibling repos live under `%USERPROFILE%/Code/<repo>` and at `github.com/vaugouin/<repo>`; they are interdependent stages of one pipeline that converges on a shared MySQL/MariaDB database (`T_WC_*` tables) and a ChromaDB vector store. The canonical roster of sibling repositories is kept in `doc/related-repositories/related-repositories.txt` in the `tmdb-front` repo.
+
+Pipeline stages:
+- **Infrastructure** — `python` (shared crawler base image), `chromadb` (vector service), `reverseproxy` (NGINX TLS ingress), `chromadb-security-test` (firewall validation).
+- **Acquisition** — `tmdb-crawler`, `imdb-crawler`, `sparql-crawler`, `sparql-movies-persons`, `wikidata-crawler`, `wikipedia-crawler`, `selenium-tmdb`, `download-images`, `sqlite-plex-to-tmdb`, `movieparadise`.
+- **Preprocessing → `T_WC_T2S_*`** — `tmdb-movie-preprocess`, `tmdb-person-preprocess`, `keywords-processing`.
+- **Semantic index & name resolution** — `embedding-update`, `embedding-query`, `rapidfuzz_query`.
+- **Serving** — `fastapi-text2sql` (NL→SQL API + MCP server), `voice-agent`, `tmdb-front` (PHP web front-end).
+- **Evaluation** — `eval-text2sql`, `extract-movie-questions`.
+- **Maintenance & tooling** — `plex-duplicates`, `subtitle-translate`, `powershell`, `playwright-test`.
+- **Monitoring & observability** — `data-monitoring`.
+
+**This repository's role:** Semantic-index stage. Keeps the ChromaDB vector collections (served by the `chromadb` repo) in sync with the `T_WC_T2S_*` read-model produced by the preprocessing repos. The collections it maintains are consumed by `fastapi-text2sql` for entity resolution and cache lookup, and exercised by `embedding-query`.
+
+---
+
 ## Where things live (file → role)
 
 Edit at the right layer; the architecture is intentionally split.
@@ -68,5 +86,52 @@ Keep Markdown, prompt files, JSON config, and logs UTF-8. These files contain no
 
 ---
 
-**Last Updated**: 2026-05-18
+## Build & deployment (Docker)
+
+The embeddings-update job is built and run as a Docker container via the repo's `Dockerfile` (base image `python:3.10.5-slim-bullseye`). The build adds toolchain deps and compiles SQLite 3.40.1 from source (set on `LD_LIBRARY_PATH`) for ChromaDB compatibility, installs `requirements.txt`, copies the repo, and runs `CMD ["python", "./embedding-update.py"]`. No ports or volumes are exposed; DB and ChromaDB targets come from runtime configuration.
+
+**Convention — everything that runs on the VPS runs under Docker.** Any program in
+this ecosystem that executes on the VPS (the main job, one-off maintenance scripts,
+backfills) runs inside a container, never as a bare `python script.py` on the host.
+Don't bake secrets into the image: pass them at runtime with
+`--env-file /home/debian/docker/<repo>/.env`. Use `--network host` so the container
+reaches host-local services (ChromaDB on `127.0.0.1:8100`, MariaDB).
+
+**Running a one-off script (e.g. a backfill) reuses this image** by overriding the
+`CMD` after the image name — no separate Dockerfile needed. Example, the movie-year
+metadata backfill (`backfill-movie-year.py`):
+
+```bash
+cd /home/debian/docker/embedding-update
+docker build -t embedding-update-python-app .
+# dry-run first (reports only, writes nothing):
+docker run -it --rm --network host \
+  --env-file /home/debian/docker/embedding-update/.env \
+  --name embedding-update-backfill \
+  embedding-update-python-app python backfill-movie-year.py --dry-run
+# then the real run:
+docker run -it --rm --network host \
+  --env-file /home/debian/docker/embedding-update/.env \
+  --name embedding-update-backfill \
+  embedding-update-python-app python backfill-movie-year.py
+```
+
+Use a distinct `--name` (not `embedding-update`) so a one-off never collides with
+the scheduled job's container, and `-it` (foreground) to watch progress.
+
+---
+
+**Last Updated**: 2026-06-24
 **Current Version**: 1.0.0 
+
+## Backlog (Nestor second-brain)
+
+The prioritized, agent-ready implementation backlog for this repo lives in the **Nestor**
+knowledge repo (a separate repo, not cloned alongside this one):
+
+- This repo: `C:\Users\vaugo\Nestor\projets\t2s-backlog\repos\embedding-update.md`
+- Cross-repo dashboard: `C:\Users\vaugo\Nestor\projets\t2s-backlog\index.md`
+
+Consult it before implementing: tasks are `EMBEDDING-UPDATE-NNN` with status (done / in-progress /
+todo), priority, and quick-wins. NOTE: these are local paths on Philippe's PC and do not
+resolve on the VPS or on cloud agents (claude.ai/code).

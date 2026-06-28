@@ -40,3 +40,9 @@ local_chromadb_topics_en/
 Thumbs.db
 
 citizenphilsecrets.py
+
+# Claude Code local tooling
+.claude/
+
+# Claude Code / agent local tooling
+.agents/
