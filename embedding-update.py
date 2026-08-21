@@ -404,7 +404,7 @@ try:
                 cp.f_setservervariable(strservervariablenameid, "", f"Current {strentityname} ID in the embedding update process", 0)
                 cp.f_setservervariable(strservervariablenamestartdatetime, strprocessstartlocal, f"Date and time of the last start of the {strentityname} embedding update process", 0)
 
-            def f_process_en_fr_original_title_embeddings_from_lang_table(*, strentityname, strentitycollection, strtablename, strtablelang, strkeyfieldname, stroldid, chromacollection, strtitlefielden, strtitlefieldfr, stroriginal_language_field, stroriginal_title_field, stryearfield=None, id_is_numeric=True, check_duplicate_content_globally=True):
+            def f_process_en_fr_original_title_embeddings_from_lang_table(*, strentityname, strentitycollection, strtablename, strtablelang, strkeyfieldname, stroldid, chromacollection, strtitlefielden, strtitlefieldfr, stroriginal_language_field, stroriginal_title_field, stryearfield=None, id_is_numeric=True):
                 """Sync EN, FR, and original-language ChromaDB embeddings using a joined language table.
 
                 Queries the main entity table joined with a separate language/translation table
@@ -415,8 +415,7 @@ try:
                 documents whose source row no longer exists in the database.
 
                 Unlike ``f_process_bilingual_t2s_entity_embeddings``, this function does not
-                append an overview and optionally checks the collection for duplicate content
-                before inserting a new document.
+                append an overview to the document text.
 
                 Args:
                     strentityname: Short entity identifier used in doc IDs and server variables
@@ -433,8 +432,6 @@ try:
                     stroriginal_language_field: Column name for the original language code.
                     stroriginal_title_field: Column name for the original-language title.
                     id_is_numeric: Whether the primary key is numeric (affects SQL quoting).
-                    check_duplicate_content_globally: When ``True``, queries the collection for
-                        an exact-match document before adding a new one to avoid duplicates.
                 """
                 print("Create embeddings for the " + strentitycollection)
 
@@ -534,23 +531,6 @@ try:
                                 strdoctext = existing_doc['documents'][0]
                                 if strdoctext == strfulldesc:
                                     continue
-
-                            if check_duplicate_content_globally:
-                                try:
-                                    search_results = chromacollection.query(
-                                        query_texts=[strfulldesc],
-                                        n_results=1
-                                    )
-                                    if (
-                                        search_results.get("documents") and
-                                        len(search_results["documents"]) > 0 and
-                                        len(search_results["documents"][0]) > 0 and
-                                        str(search_results["documents"][0][0]).lower() == strfulldesc.lower()
-                                    ):
-                                        continue
-                                except Exception as e:
-                                    print(f"Warning: Could not check for existing content: {e}")
-                                    pass
 
                             # Attach year metadata only when available (ChromaDB rejects None);
                             # documents are passed too, so this doc is (re)embedded as before.
@@ -926,7 +906,6 @@ try:
                         stroriginal_title_field="ORIGINAL_TITLE",
                         stryearfield="RELEASE_YEAR",
                         id_is_numeric=True,
-                        check_duplicate_content_globally=True,
                     )
                 elif intindex == 203:
                     # Create embeddings for the series
@@ -948,7 +927,6 @@ try:
                         stroriginal_language_field="ORIGINAL_LANGUAGE",
                         stroriginal_title_field="ORIGINAL_TITLE",
                         id_is_numeric=True,
-                        check_duplicate_content_globally=True,
                     )
                 elif intindex == 204:
                     # Create embeddings for the persons
