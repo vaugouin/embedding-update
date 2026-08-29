@@ -1049,6 +1049,20 @@ try:
                         stroldid=strlistidold,
                         strtitlefielden="LIST_NAME",
                         strtitlefieldfr="LIST_NAME_FR",
+                        # Le nom seul, sans la description, comme pour les groupes.
+                        # Mesure du 2026-08-29 : sur toute la table, QUATRE lignes portent un
+                        # OVERVIEW, long de 105 caracteres en moyenne et valant 2,7 fois le nom.
+                        # Une description de ce rapport ecrase le score lexical du garde de
+                        # resolution, qui compare le nom tape au document entier : c'est le
+                        # defaut trouve sur les collections (fastapi-text2sql -224), ou
+                        # « flamenco trilogy » notait 20 contre un seuil de 72 face au document
+                        # complet, et 80 face au nom seul.
+                        # L'autre remede etait de declarer `document_name_separator` cote API,
+                        # qui garde la description dans l'espace vectoriel et l'exclut du score.
+                        # Il a ete ecarte ici : quatre lignes ne valent pas un mecanisme qui
+                        # doit rester d'accord entre deux depots, accord qui a justement derive
+                        # deux mois sans que personne ne puisse le voir.
+                        overview_field=None,
                         chromacollection=lists,
                     )
                 elif intindex == 212:
