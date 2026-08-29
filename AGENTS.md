@@ -86,6 +86,76 @@ Keep Markdown, prompt files, JSON config, and logs UTF-8. These files contain no
 
 ---
 
+## Incremental passes: the two watermarks that decide what gets re-indexed
+
+Every pass is incremental, and what it processes is decided by **two** server variables per
+entity, not one. Both live in `<DB_NAMESPACE>SERVER_VARIABLE` (`VAR_NAME`, `VAR_VALUE`,
+`DELETED = 0`) and are named from `strservervariableprefix = "strembeddingupdate"`:
+
+| Variable | Role |
+|---|---|
+| `strembeddingupdate<entity>startdatetime` | date watermark: only rows with `TIM_UPDATED >=` this value are read |
+| `strembeddingupdate<entity>id` | **resume marker**: when non-empty, only rows with `<key> >=` this value are read |
+
+`<entity>` is the singular `strentityname`, so the list pass reads
+`strembeddingupdateliststartdatetime` and `strembeddingupdatelistid`.
+
+The three processing functions (`f_process_bilingual_t2s_entity_embeddings`,
+`f_process_en_fr_original_title_embeddings_from_lang_table`,
+`f_process_single_language_entity_embeddings`) all build the same filter, and they **combine**:
+
+```sql
+-- when the id watermark is non-empty
+WHERE <key> >= <id>  AND TIM_UPDATED >= '<startdatetime>'
+-- when it is empty
+WHERE TIM_UPDATED >= '<startdatetime>'
+```
+
+`locations` is the exception in form only: it is processed inline with hand-written SQL rather
+than through one of the three functions, but it applies the same two filters
+(`strlocationidold` and `strlocationstartdatetimeprevious`), so the rules below still hold.
+
+**Lifecycle, and this is the part that is easy to get wrong.** The id variable is rewritten on
+**every row** as the loop advances, so an interrupted pass leaves it pointing at the last entity
+processed and the next pass resumes from there. At the end of a clean pass it is reset to the
+empty string and the date variable is set to **that pass's start time**, not its end, so rows
+modified while the pass was running are still caught by the next one.
+
+Consequence: **after any clean pass the id watermark is empty and only the date filter applies.**
+It is non-empty only when the previous pass died mid-way.
+
+### Forcing a re-index of specific rows
+
+Changing what gets *indexed* (the document text) does not re-index anything by itself: the rows
+must look modified. Touch them, then check the resume marker is not standing in the way.
+
+```sql
+-- 1. read both watermarks first
+SELECT VAR_NAME, VAR_VALUE
+FROM   T_WC_SERVER_VARIABLE
+WHERE  DELETED = 0
+AND    VAR_NAME IN ('strembeddingupdate<entity>startdatetime',
+                    'strembeddingupdate<entity>id');
+
+-- 2. make the rows eligible
+UPDATE <table> SET TIM_UPDATED = NOW() WHERE <your condition>;
+
+-- 3. ONLY if step 1 returned a non-empty id ABOVE the ids you just touched,
+--    clear it, or the pass will skip them despite the fresh date
+UPDATE T_WC_SERVER_VARIABLE SET VAR_VALUE = '0'
+WHERE  DELETED = 0 AND VAR_NAME = 'strembeddingupdate<entity>id';
+```
+
+`'0'` rather than `''` is deliberate: the code tests `if stroldid != ""`, so an empty string
+drops the id clause entirely while `'0'` yields `>= 0`, which excludes nothing. Either works.
+
+Re-indexing replaces cleanly: the functions `delete(ids=[strdocid])` before `add(...)`, so no
+stale document survives with the old text.
+
+**Worked example, 2026-08-29.** The list pass stopped appending `OVERVIEW` to the indexed
+document (`overview_field=None`, mirroring `groups`). Four rows carried an overview, so four
+rows needed `TIM_UPDATED` touched; nothing else in the table had a document change.
+
 ## Build & deployment (Docker)
 
 The embeddings-update job is built and run as a Docker container via the repo's `Dockerfile` (base image `python:3.10.5-slim-bullseye`). The build adds toolchain deps and compiles SQLite 3.40.1 from source (set on `LD_LIBRARY_PATH`) for ChromaDB compatibility, installs `requirements.txt`, copies the repo, and runs `CMD ["python", "./embedding-update.py"]`. No ports or volumes are exposed; DB and ChromaDB targets come from runtime configuration.
