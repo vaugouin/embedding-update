@@ -18,7 +18,7 @@ Deeper specs live in their own files:
 `embedding-update` is one stage of **Agent BBB**, a multi-repository movie/TV database system owned by GitHub user `vaugouin`. All sibling repos live under `%USERPROFILE%/Code/<repo>` and at `github.com/vaugouin/<repo>`; they are interdependent stages of one pipeline that converges on a shared MySQL/MariaDB database (`T_WC_*` tables) and a ChromaDB vector store. The canonical roster of sibling repositories is kept in `%USERPROFILE%/Nestor/projets/t2s-backlog/topics/related-repositories.txt` (documentation repo `Nestor`, outside `Code/`).
 
 Pipeline stages:
-- **Infrastructure** — `python` (shared crawler base image), `chromadb` (vector service), `reverseproxy` (NGINX TLS ingress), `chromadb-security-test` (firewall validation).
+- **Infrastructure** — `python` (shared crawler base image), `chromadb` (vector service), `reverseproxy` (NGINX TLS ingress), `chromadb-security-test` (firewall validation), `tools` (host-side operational scripts for the shared MariaDB: backups per perimeter, one-off `.sql` runs; **private repo**, it documents where the database lives and how it is restored).
 - **Acquisition** — `tmdb-crawler`, `imdb-crawler`, `sparql-crawler`, `sparql-movies-persons`, `wikidata-crawler`, `wikipedia-crawler`, `selenium-tmdb`, `download-images`, `sqlite-plex-to-tmdb`, `movieparadise`.
 - **Preprocessing → `T_WC_T2S_*`** — `tmdb-movie-preprocess`, `tmdb-person-preprocess`, `keywords-processing`.
 - **Semantic index & name resolution** — `embedding-update`, `embedding-query`, `rapidfuzz_query`.
@@ -155,6 +155,41 @@ stale document survives with the old text.
 **Worked example, 2026-08-29.** The list pass stopped appending `OVERVIEW` to the indexed
 document (`overview_field=None`, mirroring `groups`). Four rows carried an overview, so four
 rows needed `TIM_UPDATED` touched; nothing else in the table had a document change.
+
+## `t2slocations` (process 216): what an agent must not undo
+
+The collection of the locations read-model, EMBEDDING-UPDATE-005. The README carries the user-facing
+description; these are the constraints.
+
+- **Created here, explicitly configured, and nowhere else.** `f_getorcreatet2slocationscollection()`
+  passes `T2SLOCATIONS_HNSW_CONFIGURATION` (`space l2`, `ef_search 100`, `ef_construction 100`,
+  `max_neighbors 16`). Chroma ignores the configuration on an existing collection and `space` can
+  never be changed, so the first program to call `get_or_create_collection("t2slocations")` wins for
+  ever. Consumers (`fastapi-text2sql`, `embedding-query`) must use `get_collection`. The function reads
+  the configuration back and prints it at every start; it never raises, because a failure on this one
+  collection must not stop the fifteen others (`t2slocations` is then `None` and 216 skips the run).
+- **Keyed on `ID_LOCATION`, which requires the process 72 fix of 2026-09-13.** Before it,
+  `tmdb-movie-preprocess` renumbered `ID_LOCATION` at every nightly rebuild (the INSERT of step 1c
+  listed no `ID_LOCATION`); since the fix the id is carried over by a join on the served table, places
+  that left the perimeter stay as `DELETED = 1` rows, new ids go above the served maximum. Document id
+  `t2slocationid_<ID_LOCATION>_<lang>`, `id_wikidata` in the metadata like deaths and nominations.
+  Never build this collection against a preprocess that predates the fix: every night would re-key
+  and re-embed the whole collection.
+- **The French document is skipped on the label, not on the document.** The type word is translated,
+  so two documents of a place with the same label in both languages never compare equal; the rule of
+  the other collections (skip FR when identical to EN) is therefore applied to `LOCATION_NAME_FR ==
+  LOCATION_NAME`. `deduplicate-embeddings.py` would find nothing to do on this collection.
+- **No silent full-scan fallback.** Process 209 replays its query without the date filter on any
+  exception; 216 lets the error surface. Watermarks and their reset follow the two-variable lifecycle
+  above (`strembeddingupdatet2slocationstartdatetime`, `strembeddingupdatet2slocationid`).
+- **216 is the last process of the scope**, so the end-of-run marker is `if intindex == 216`. A process
+  added after it must move that marker, or `currentcontent` is cleared one process too early and a
+  crash in the new process would not resume. Being last also means `UPDATE T_WC_SERVER_VARIABLE SET
+  VAR_VALUE = 't2slocation' WHERE VAR_NAME = 'strembeddingupdatecurrentcontent'` runs 216 alone, which
+  is the way to run it on demand without editing code.
+- **`chromadb` is pinned to the 1.x line** (`>=1.0.0,<2.0.0`) because the `configuration=` parameter
+  belongs to the 1.x client; the code still falls back to the legacy `hnsw:*` metadata keys if the
+  parameter is missing.
 
 ## Build & deployment (Docker)
 

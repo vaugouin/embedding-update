@@ -27,6 +27,7 @@ This repository contains a Python script, `embedding-update.py`, used to maintai
   - `collections`
   - `deaths` (bilingual EN/FR; overview appended to text)
   - `movements`
+  - `t2slocations` (bilingual EN/FR; the locations read-model `T_WC_T2S_LOCATION`, keyed on `ID_LOCATION`; created here with an explicit HNSW configuration, see Process 216)
 - **Iterates over entities** in the database and for each entity type:
   - Builds a stable document ID like `topicid_<ID>_<LANG>` or `movieid_<ID>_<LANG>`.
   - Creates or updates the corresponding document in ChromaDB.
@@ -176,6 +177,7 @@ Each collection uses a consistent document ID pattern:
 - Movements: `movementid_<ID_MOVEMENT>_<LANG>` (bilingual EN/FR)
 - Deaths: `deathid_<ID_DEATH>_<LANG>` (bilingual EN/FR; overview appended to text)
 - Nominations: `nominationid_<ID_NOMINATION>_<LANG>` (bilingual EN/FR; overview appended to text)
+- T2S locations: `t2slocationid_<ID_LOCATION>_<LANG>` (bilingual EN/FR; document `<name>: <type word>, <Wikidata description>`; Wikidata id in metadata, see Process 216)
 
 This convention allows the script to:
 
@@ -206,6 +208,62 @@ Current process IDs include:
 | 213 | movements | Bilingual EN/FR |
 | 214 | deaths | Bilingual EN/FR; overview appended to text; Wikidata ID stored in metadata |
 | 215 | nominations | Bilingual EN/FR; overview appended to text; Wikidata ID stored in metadata |
+| 216 | t2slocations | Bilingual EN/FR; read-model `T_WC_T2S_LOCATION`; keyed on `ID_LOCATION`; Wikidata id in metadata; type word and Wikidata description appended; metadata reconciled without re-embedding; set-difference orphan sweep (EMBEDDING-UPDATE-005) |
+
+### Process 216: `t2slocations`
+
+The locations read-model gets its own collection, next to the old `locations` one (which stays
+until API 1.1.18 is decommissioned, EMBEDDING-UPDATE-010). Four things are different from the
+other bilingual processes, and each has a reason written next to the code.
+
+- **The collection is created here, with an explicit HNSW configuration**
+  (`T2SLOCATIONS_HNSW_CONFIGURATION`): `space = l2` like the fifteen others (the OpenAI vectors are
+  unit-length, so `l2`, `cosine` and `ip` rank identically), `ef_search = 100` so that an exact match
+  is always in the top ten the resolver reads, `ef_construction = 100` and `max_neighbors = 16` (the
+  hnswlib defaults, written down so they cannot drift with the server image). `space` cannot be
+  changed after creation. The configuration is read back and printed at every start; a `space` other
+  than `l2` means another program created the collection first, and the fix is to drop and rebuild it.
+  **`fastapi-text2sql` and `embedding-query` must open it with `get_collection`, never
+  `get_or_create_collection`**: whoever creates first decides the configuration for ever.
+- **Documents are keyed on `ID_LOCATION`**, like the other T2S entities, with the Wikidata id in the
+  metadata (`id_wikidata`). This relies on process 72 of `tmdb-movie-preprocess` keeping `ID_LOCATION`
+  stable across its nightly rebuild, which it does since the fix of 2026-09-13 (a known place keeps its
+  id, a place that left the perimeter stays as a `DELETED = 1` row, a new place gets an id above the
+  served maximum). **Build this collection only after that fix is deployed**: on a table that
+  renumbers, every night would re-key and re-embed everything. `DELETED = 1` rows are read and their
+  documents removed.
+- **The document is `<name>: <type word>, <Wikidata description>`**, for example
+  `Paris: city, capital and largest city of France` and `Paris: ville, capital and largest city of
+  France`. The bare label made Paris (France) and Paris (Texas) two identical documents; the
+  description is the only thing that separates them in the vector space. The `: ` separator is what
+  the API declares as `document_name_separator`, so only the name enters the lexical ratio. The
+  description is English only (`OVERVIEW` has no French twin in the read-model); the type word is
+  translated (`ARR_T2SLOCATION_TYPE_LABEL`). The French document is skipped when the French **label**
+  equals the English one (the type word would otherwise defeat the identical-document rule).
+- **Metadata**: `id` (the `ID_LOCATION` as a string, same value as in the document id), `language`,
+  `name` (the bare label, so nothing ever needs to be cut out of the document again), `id_wikidata`,
+  `location_type` (absent when the place has no type). A change in metadata alone is written with
+  `update(metadatas=...)`, without touching the vector.
+- **Reconciliation is batched** (500 rows per `get`, one `add` / `update` / `delete` per batch) and the
+  orphan sweep is one set difference between the collection ids and the living `ID_WIKIDATA` values,
+  instead of one `SELECT` per document. Orphans are collected during the scan and deleted after it,
+  because deleting while paging by offset skips documents.
+
+Because the read-model is rebuilt nightly with a fresh `TIM_UPDATED`, the first pass after 01:00 reads
+the whole table (about 12 000 rows), compares every document and re-embeds nothing that did not
+change; the later passes of the day read nothing.
+
+**First run, on the VPS.** Process 216 is the last of the scope, so setting the resume marker isolates it:
+
+```sql
+UPDATE T_WC_SERVER_VARIABLE SET VAR_VALUE = 't2slocation'
+WHERE  DELETED = 0 AND VAR_NAME = 'strembeddingupdatecurrentcontent';
+```
+
+then run the job once in the foreground (`docker run -it --rm ...`, see above). Expected on stdout:
+the `t2slocations configuration:` line with `space: l2` and `ef_search: 100`; `N lines` equal to the
+row count of `T_WC_T2S_LOCATION` (`DELETED = 1` rows included); the added count equal to the living EN
+rows plus the living FR rows whose label differs; zero orphans. A second run right after must report everything unchanged and add nothing.
 
 ## Notes
 

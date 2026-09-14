@@ -38,6 +38,7 @@ COLLECTION_NAMES = [
     "awards",
     "nominations",
     "movements",
+    "t2slocations",
 ]
 
 CANONICAL_LANG = "en"
