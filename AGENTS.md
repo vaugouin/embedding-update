@@ -25,7 +25,7 @@ Pipeline stages:
 - **Serving** — `fastapi-text2sql` (NL→SQL API + MCP server), `voice-agent`, `tmdb-front` (PHP web front-end).
 - **Evaluation** — `eval-text2sql`, `extract-movie-questions`.
 - **Maintenance & tooling** — `plex-duplicates`, `subtitle-translate`, `powershell`, `playwright-test`.
-- **Monitoring & observability** — `data-monitoring`.
+- **Monitoring & observability** — `data-monitoring`, `pipeline-3d` (three.js replay of one question's execution trace through `voice-agent` and `fastapi-text2sql`).
 
 **This repository's role:** Semantic-index stage. Keeps the ChromaDB vector collections (served by the `chromadb` repo) in sync with the `T_WC_T2S_*` read-model produced by the preprocessing repos. The collections it maintains are consumed by `fastapi-text2sql` for entity resolution and cache lookup, and exercised by `embedding-query`.
 
