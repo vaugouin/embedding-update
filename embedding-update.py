@@ -99,6 +99,8 @@ cp.f_setservervariable(strservervariablenameprocessesexecuted,strprocessesexecut
 # Create or load entity collections with the custom embedding function
 CHROMADB_COLLECTIONS_BY_NAME = {
     name: chroma_client.get_or_create_collection(name=name, embedding_function=embedding_function)
+    # "locations" (keyed on the QID) is gone since 2026-10-09 too: it served API 1.1.18 only,
+    # retired with Blue; places are embedded in t2slocations by process 216 (EMBEDDING-UPDATE-010).
     # "persons" is gone since 2026-10-09: fastapi-text2sql resolves person names with rapidfuzz on
     # T_WC_T2S_PERSON and T_WC_T2S_PERSON_ALSO_KNOWN_AS and never queried this collection, so
     # process 204 paid OpenAI embeddings for nothing. Listing it here would recreate it empty, and
@@ -109,7 +111,6 @@ CHROMADB_COLLECTIONS_BY_NAME = {
         "companies",
         "networks",
         "topics",
-        "locations",
         "groups",
         "characters",
         "lists",
@@ -128,7 +129,6 @@ companies = CHROMADB_COLLECTIONS_BY_NAME["companies"]
 networks = CHROMADB_COLLECTIONS_BY_NAME["networks"]
 characters = CHROMADB_COLLECTIONS_BY_NAME["characters"]
 groups = CHROMADB_COLLECTIONS_BY_NAME["groups"]
-locations = CHROMADB_COLLECTIONS_BY_NAME["locations"]
 lists = CHROMADB_COLLECTIONS_BY_NAME["lists"]
 collections = CHROMADB_COLLECTIONS_BY_NAME["collections"]
 deaths = CHROMADB_COLLECTIONS_BY_NAME["deaths"]
@@ -1060,7 +1060,7 @@ try:
                 cp.f_setservervariable(strservervariablenamestartdatetime, strprocessstartlocal, f"Date and time of the last start of the {strentityname} embedding update process", 0)
 
             #arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 207: 'character', 208: 'group', 209: 'location', 210: 'award'}
-            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             strservervariablenametopicid = strservervariableprefix + "topic" + "id"
             strservervariablenamemovieid = strservervariableprefix + "movie" + "id"
             strservervariablenameserieid = strservervariableprefix + "serie" + "id"
@@ -1097,20 +1097,21 @@ try:
             strcurrentcontent = cp.f_getservervariable(strservervariablenamecurrentcontent,0)
             
             if strcurrentcontent == "movie":
-                arrprocessscope = {202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "serie":
-                arrprocessscope = {203: 'serie', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "person":
                 # Process 204 is retired: an old resume point inside it resumes at 205.
-                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "company":
-                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "network":
-                arrprocessscope = {206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "group":
-                arrprocessscope = {208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "location":
-                arrprocessscope = {209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                # Process 209 is retired (EMBEDDING-UPDATE-010): an old resume point inside it resumes at 210.
+                arrprocessscope = {210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "award":
                 arrprocessscope = {210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "list":
@@ -1388,150 +1389,6 @@ try:
                         strtitlefieldfr="MOVEMENT_NAME_FR",
                         chromacollection=movements,
                     )
-                elif intindex == 209:
-                    # Create embeddings for the locations (narrative location, filming location)
-                    strentityname = "location"
-                    strentitycollection = "locations"
-                    strtablename = "T_WC_T2S_ITEM"
-                    strtablenameproperty = "T_WC_WIKIDATA_ITEM_PROPERTY"
-                    strkeyfieldname = "ID_ITEM"
-                    strkeyfieldnamet2s = "ID_WIKIDATA"
-                    print("Create embeddings for the " + strentitycollection)
-
-                    strservervariablenameid = strservervariableprefix + strentityname + "id"
-                    strservervariablenamestartdatetime = strservervariableprefix + strentityname + "startdatetime"
-                    strservervariablenamedeletereport = strservervariableprefix + strentityname + "deletereport"
-                    strservervariablenamenotdeletereport = strservervariableprefix + strentityname + "notdeletereport"
-
-                    strlocationstartdatetimeprevious = cp.f_getservervariable(strservervariablenamestartdatetime,0)
-                    strprocessstart = datetime.now(cp.paris_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-                    strsql = ""
-                    strsql += "SELECT DISTINCT " + strtablenameproperty + "." + strkeyfieldname + ", 'en' AS ENGLISH_LANGUAGE, t2s.ITEM_LABEL, 'fr' AS FRENCH_LANGUAGE, t2s.ITEM_LABEL_FR, t2s.DELETED "
-                    strsql += "FROM " + strtablenameproperty + " "
-                    strsql += "INNER JOIN " + strtablename + " t2s ON " + strtablenameproperty + "." + strkeyfieldname + " = t2s." + strkeyfieldnamet2s + " "
-                    strsql += "WHERE " + strtablenameproperty + ".ID_PROPERTY IN ('P840', 'P915') "
-                    if strlocationidold != "":
-                        strsql += "AND " + strtablenameproperty + "." + strkeyfieldname + " >= '" + strlocationidold + "' "
-                    if strlocationstartdatetimeprevious is not None and str(strlocationstartdatetimeprevious).strip() != "":
-                        strlocationstartdatetimeprevious = str(strlocationstartdatetimeprevious).strip().replace("'", "''")
-                        strsql += "AND t2s.TIM_UPDATED >= '" + strlocationstartdatetimeprevious + "' "
-                    strsql += "ORDER BY " + strtablenameproperty + "." + strkeyfieldname + " ASC "
-                    try:
-                        cursor.execute(strsql)
-                    except Exception:
-                        strsql = ""
-                        strsql += "SELECT DISTINCT " + strtablenameproperty + "." + strkeyfieldname + ", 'en' AS ENGLISH_LANGUAGE, t2s.ITEM_LABEL, 'fr' AS FRENCH_LANGUAGE, t2s.ITEM_LABEL_FR, t2s.DELETED "
-                        strsql += "FROM " + strtablenameproperty + " "
-                        strsql += "INNER JOIN " + strtablename + " t2s ON " + strtablenameproperty + "." + strkeyfieldname + " = t2s." + strkeyfieldnamet2s + " "
-                        strsql += "WHERE " + strtablenameproperty + ".ID_PROPERTY IN ('P840', 'P915') "
-                        if strlocationidold != "":
-                            strsql += "AND " + strtablenameproperty + "." + strkeyfieldname + " >= '" + strlocationidold + "' "
-                        strsql += "ORDER BY " + strtablenameproperty + "." + strkeyfieldname + " ASC "
-                        cursor.execute(strsql)
-                    lngrowcount = cursor.rowcount
-                    print(f"{lngrowcount} lines")
-                    results = cursor.fetchall()
-                    for row in results:
-                        strlocationid = row[strkeyfieldname]
-                        cp.f_setservervariable(strservervariablenameid,strlocationid,f"Current {strentityname} ID in the embedding update process",0)
-                        arrlanguage = {}
-                        arrtitle = {}
-                        arrlanguage['en'] = (row.get('ENGLISH_LANGUAGE') or '').strip()
-                        arrtitle['en'] = (row.get('ITEM_LABEL') or '').strip()
-                        arrlanguage['fr'] = (row.get('FRENCH_LANGUAGE') or '').strip()
-                        arrtitle['fr'] = (row.get('ITEM_LABEL_FR') or '').strip()
-                        intdeleted = row.get('DELETED', 0)
-                        # Process embeddings for each title in each language
-                        strfirstlangfulldesc = None
-                        for lang_code in arrlanguage.keys():
-                            if lang_code in arrtitle and arrtitle[lang_code].strip() != "":
-                                strdocid = strentityname + "id_" + strlocationid + "_" + lang_code
-                                strlocationfulldesc = arrtitle[lang_code]
-                                if len(strlocationfulldesc) > max_chars:
-                                    strlocationfulldesc = strlocationfulldesc[:max_chars] + "..."
-                                if strfirstlangfulldesc is None:
-                                    strfirstlangfulldesc = strlocationfulldesc
-                                elif strlocationfulldesc == strfirstlangfulldesc:
-                                    continue
-                                print(strlocationfulldesc)
-                                # Check if the document exists in ChromaDB
-                                existing_doc = locations.get(ids=[strdocid])
-
-                                if intdeleted == 1:
-                                    # This document is deleted
-                                    # Delete it from the collection
-                                    locations.delete(ids=[strdocid])
-                                    print(f"{strkeyfieldname}: {strlocationid}, {strlocationfulldesc} -> DELETED")
-                                    continue
-                                
-                                if existing_doc and len(existing_doc['ids']) > 0:
-                                    strdoctext = existing_doc['documents'][0]
-                                    if strdoctext == strlocationfulldesc:
-                                        # This document was already processed to an embedding
-                                        # Nothing to do 
-                                        #print(f"{strkeyfieldname}: {strlocationid}, {strlocationfulldesc} -> ALREADY PROCESSED")
-                                        continue
-                                
-                                # Check if the document exists in ChromaDB
-                                if existing_doc and len(existing_doc['ids']) > 0:
-                                    locations.update(
-                                        ids=[strdocid],
-                                        documents=[strlocationfulldesc],
-                                        metadatas=[{"id": strlocationid, "language": lang_code}]                                        
-                                    )
-                                    print(f"{strkeyfieldname}: {strlocationid}, {strlocationfulldesc} -> UPDATED")
-                                else:
-                                    # Add it to the collection
-                                    locations.add(
-                                        ids=[strdocid],
-                                        documents=[strlocationfulldesc],
-                                        metadatas=[{"id": strlocationid, "language": lang_code}]                                        
-                                )
-                                print(f"{strkeyfieldname}: {strlocationid}, {strlocationfulldesc} -> ADDED")
-
-                    # Now delete all location embeddings that do not exist anymore in the T2S_ITEM table
-                    print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
-                    batch_size = 1000
-                    offset = 0
-                    lngdeletedcount = 0
-                    lngnondeletedcount = 0
-                    while True:
-                        # Step 1: get all ids from locations
-                        results = locations.get(include=[], limit=batch_size, offset=offset)
-                        ids = results["ids"]
-                        #print(results["ids"])
-                        if not ids:
-                            break
-                        for id in ids:
-                            # Extract the 3 parts from id using underscore separator
-                            parts = id.split('_')
-                            docentity = parts[0]
-                            docid = parts[1]
-                            doclang = parts[2]
-                            if docentity != strentityname + "id":
-                                continue
-                            strsql = "SELECT " + strkeyfieldnamet2s + " FROM " + strtablename + " WHERE " + strkeyfieldnamet2s + " = '" + docid + "' "
-                            #print(strsql)
-                            cursor.execute(strsql)
-                            lngrowcount = cursor.rowcount
-                            if lngrowcount == 0:
-                                locations.delete(ids=[id])
-                                print(f"Deleted {id} ")
-                                lngdeletedcount += 1
-                            else:
-                                print(f"Not deleted {id} ")
-                                lngnondeletedcount += 1
-                        if len(ids) < batch_size:
-                            break
-                        offset += batch_size
-                    print(f"Deleted {lngdeletedcount} {strentityname} docs")
-                    print(f"Not deleted {lngnondeletedcount} {strentityname} docs")
-                    cp.f_setservervariable(strservervariablenamedeletereport,f"Deleted {lngdeletedcount} {strentityname} docs (enabled)","",0)
-                    cp.f_setservervariable(strservervariablenamenotdeletereport,f"Not deleted {lngnondeletedcount} {strentityname} docs","",0)
-                    cp.f_setservervariable(strservervariablenameid,"",f"Current {strentityname} ID in the embedding update process",0)
-                    cp.f_setservervariable(strservervariablenamestartdatetime,strprocessstart,f"Date and time of the last start of the {strentityname} embedding update process",0)
-
                 elif intindex == 214:
                     # Create embeddings for the deaths
                     strentityname = "death"

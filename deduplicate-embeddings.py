@@ -29,7 +29,6 @@ COLLECTION_NAMES = [
     "companies",
     "networks",
     "topics",
-    "locations",
     "groups",
     "characters",
     "lists",

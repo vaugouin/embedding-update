@@ -18,7 +18,6 @@ This repository contains a Python script, `embedding-update.py`, used to maintai
   - `networks`
   - `characters` (collection exists but processing is currently disabled — see Processes)
   - `groups`
-  - `locations`
   - `anonymizedqueries`
   - `awards`
   - `nominations` (bilingual EN/FR; overview appended to text)
@@ -109,7 +108,7 @@ At a high level, the script:
    - Currently processed entity kind (`strembeddingupdatecurrentcontent`)
    - Execution metadata and reports
 
-3. **Processes each entity type** (topics, movies, series, companies, networks, groups, locations, awards, lists, collections, movements):
+3. **Processes each entity type** (topics, movies, series, companies, networks, groups, awards, lists, collections, movements):
    - Queries the corresponding table(s) via SQL.
    - Builds the document text (e.g. topic name + overview, or movie/series titles in different languages), truncated to stay inside OpenAI embedding limits (~32 000 characters).
    - Uses consistent ID patterns to identify documents in ChromaDB.
@@ -200,7 +199,7 @@ Current process IDs include:
 | 206 | networks | Single-language (English) |
 | 207 | ~~characters~~ | **Currently disabled** (mapped to 1207 in routing) |
 | 208 | groups | Bilingual EN/FR; non-numeric Wikidata ID |
-| 209 | locations | Bilingual EN/FR; custom join on `T_WC_WIKIDATA_ITEM_PROPERTY` filtered on P840 (narrative) and P915 (filming); Wikidata string ID |
+| 209 | ~~locations~~ | **Retired 2026-10-09** (EMBEDDING-UPDATE-010): the QID-keyed collection served API 1.1.18 only and was deleted with it; places are in `t2slocations` (process 216) |
 | 210 | awards | Bilingual EN/FR |
 | 211 | lists | Bilingual EN/FR |
 | 212 | collections | Bilingual EN/FR |
@@ -211,8 +210,8 @@ Current process IDs include:
 
 ### Process 216: `t2slocations`
 
-The locations read-model gets its own collection, next to the old `locations` one (which stays
-until API 1.1.18 is decommissioned, EMBEDDING-UPDATE-010). Four things are different from the
+The locations read-model gets its own collection, which replaced the old QID-keyed `locations` one
+(deleted on 2026-10-09 with API 1.1.18, EMBEDDING-UPDATE-010). Four things are different from the
 other bilingual processes, and each has a reason written next to the code.
 
 - **The collection is created here, with an explicit HNSW configuration**
