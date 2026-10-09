@@ -14,7 +14,6 @@ This repository contains a Python script, `embedding-update.py`, used to maintai
   - `topics`
   - `movies`
   - `series`
-  - `persons`
   - `companies`
   - `networks`
   - `characters` (collection exists but processing is currently disabled — see Processes)
@@ -110,7 +109,7 @@ At a high level, the script:
    - Currently processed entity kind (`strembeddingupdatecurrentcontent`)
    - Execution metadata and reports
 
-3. **Processes each entity type** (topics, movies, series, persons, companies, networks, groups, locations, awards, lists, collections, movements):
+3. **Processes each entity type** (topics, movies, series, companies, networks, groups, locations, awards, lists, collections, movements):
    - Queries the corresponding table(s) via SQL.
    - Builds the document text (e.g. topic name + overview, or movie/series titles in different languages), truncated to stay inside OpenAI embedding limits (~32 000 characters).
    - Uses consistent ID patterns to identify documents in ChromaDB.
@@ -196,7 +195,7 @@ Current process IDs include:
 | 201 | topics | Bilingual EN/FR; deleted if movie+serie count ≤ 1 |
 | 202 | movies | EN, FR, and original language via lang table |
 | 203 | series | EN, FR, and original language via lang table |
-| 204 | persons | Single-language (English) |
+| 204 | ~~persons~~ | **Retired 2026-10-09**: the collection was never queried by `fastapi-text2sql`, which resolves person names with rapidfuzz on `T_WC_T2S_PERSON` / `T_WC_T2S_PERSON_ALSO_KNOWN_AS`; the collection was deleted. Do not bring it back without a reader: it would re-embed every person |
 | 205 | companies | Single-language (English) |
 | 206 | networks | Single-language (English) |
 | 207 | ~~characters~~ | **Currently disabled** (mapped to 1207 in routing) |

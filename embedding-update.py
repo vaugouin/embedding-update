@@ -99,8 +99,11 @@ cp.f_setservervariable(strservervariablenameprocessesexecuted,strprocessesexecut
 # Create or load entity collections with the custom embedding function
 CHROMADB_COLLECTIONS_BY_NAME = {
     name: chroma_client.get_or_create_collection(name=name, embedding_function=embedding_function)
+    # "persons" is gone since 2026-10-09: fastapi-text2sql resolves person names with rapidfuzz on
+    # T_WC_T2S_PERSON and T_WC_T2S_PERSON_ALSO_KNOWN_AS and never queried this collection, so
+    # process 204 paid OpenAI embeddings for nothing. Listing it here would recreate it empty, and
+    # bringing 204 back would re-embed every person: do neither without a reader for it.
     for name in [
-        "persons",
         "movies",
         "series",
         "companies",
@@ -121,7 +124,6 @@ CHROMADB_COLLECTIONS_BY_NAME = {
 topics = CHROMADB_COLLECTIONS_BY_NAME["topics"]
 movies = CHROMADB_COLLECTIONS_BY_NAME["movies"]
 series = CHROMADB_COLLECTIONS_BY_NAME["series"]
-persons = CHROMADB_COLLECTIONS_BY_NAME["persons"]
 companies = CHROMADB_COLLECTIONS_BY_NAME["companies"]
 networks = CHROMADB_COLLECTIONS_BY_NAME["networks"]
 characters = CHROMADB_COLLECTIONS_BY_NAME["characters"]
@@ -1058,7 +1060,7 @@ try:
                 cp.f_setservervariable(strservervariablenamestartdatetime, strprocessstartlocal, f"Date and time of the last start of the {strentityname} embedding update process", 0)
 
             #arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 207: 'character', 208: 'group', 209: 'location', 210: 'award'}
-            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             strservervariablenametopicid = strservervariableprefix + "topic" + "id"
             strservervariablenamemovieid = strservervariableprefix + "movie" + "id"
             strservervariablenameserieid = strservervariableprefix + "serie" + "id"
@@ -1095,11 +1097,12 @@ try:
             strcurrentcontent = cp.f_getservervariable(strservervariablenamecurrentcontent,0)
             
             if strcurrentcontent == "movie":
-                arrprocessscope = {202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "serie":
-                arrprocessscope = {203: 'serie', 204: 'person', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {203: 'serie', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "person":
-                arrprocessscope = {204: 'person', 205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                # Process 204 is retired: an old resume point inside it resumes at 205.
+                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "company":
                 arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 209: 'location', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
             elif strcurrentcontent == "network":
@@ -1231,22 +1234,6 @@ try:
                         stroriginal_language_field="ORIGINAL_LANGUAGE",
                         stroriginal_title_field="ORIGINAL_TITLE",
                         id_is_numeric=True,
-                    )
-                elif intindex == 204:
-                    # Create embeddings for the persons
-                    strentityname = "person"
-                    strentitycollection = "persons"
-                    strtablename = "T_WC_T2S_PERSON"
-                    strkeyfieldname = "ID_PERSON"
-                    f_process_single_language_entity_embeddings(
-                        strentityname=strentityname,
-                        strentitycollection=strentitycollection,
-                        strtablename=strtablename,
-                        strkeyfieldname=strkeyfieldname,
-                        stroldid=strpersonidold,
-                        strnamefield="PERSON_NAME",
-                        chromacollection=persons,
-                        doclang="en",
                     )
                 elif intindex == 205:
                     # Create embeddings for the companies
