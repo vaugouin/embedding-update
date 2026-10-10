@@ -164,17 +164,19 @@ ARR_T2SLOCATION_TYPE_LABEL = {
            "structure": "structure", "nature": "site naturel", "region": "région"},
 }
 
-def f_getorcreatet2slocationscollection():
-    """Get or create the `t2slocations` collection with an explicit HNSW configuration.
+def f_getorcreatet2slocationscollection(strname="t2slocations", strprocess="216"):
+    """Get or create a read-model collection (`t2slocations` by default) with an explicit HNSW configuration.
+
+    Also serves `t2ssourceworks` (process 217, EMBEDDING-UPDATE-011): same configuration, same
+    reasons, only the name and the process number of the messages change.
 
     Tries the 1.x ``configuration=`` parameter first and falls back to the legacy
     ``metadata={"hnsw:*"}`` keys on an older client. On an existing collection both forms
     are ignored by Chroma, so the configuration is read back and printed on every run, and a
     ``space`` other than the expected one is reported loudly. Never raises: a failure here
     must not take the fifteen other collections down with it, so it returns ``None`` and
-    process 216 skips the run.
+    the process that reads it skips the run.
     """
-    strname = "t2slocations"
     try:
         try:
             chromacollection = chroma_client.get_or_create_collection(
@@ -196,7 +198,7 @@ def f_getorcreatet2slocationscollection():
                 },
             )
     except Exception as exc:
-        print(f"⚠ {strname}: collection unavailable ({exc}); process 216 will be skipped this run.")
+        print(f"⚠ {strname}: collection unavailable ({exc}); process {strprocess} will be skipped this run.")
         return None
     arrconfiguration = getattr(chromacollection, "configuration_json", None)
     if callable(arrconfiguration):
@@ -219,6 +221,27 @@ def f_getorcreatet2slocationscollection():
     return chromacollection
 
 t2slocations = f_getorcreatet2slocationscollection()
+
+# t2ssourceworks : the works movies and series are based on (Wikidata P144), read from the
+# T_WC_T2S_SOURCE_WORK read-model built by tmdb-movie-preprocess process 73
+# (TMDB-MOVIE-PREPROCESS-055). Same rules as t2slocations: created HERE only, with the same
+# explicit configuration; fastapi-text2sql and embedding-query read it with get_collection.
+# It lets the API resolve a Source_work_name ("Au coeur des tenebres", "Dracul", "Heart of
+# Darkness") to the canonical name before the SQL runs (FASTAPI-TEXT2SQL-320, 2537 FR failed on
+# a name compared in the wrong language).
+t2ssourceworks = f_getorcreatet2slocationscollection("t2ssourceworks", "217")
+
+# The words written in a source work's document, per language: the type, then the form when
+# there is one. The values are those process 73 writes (SOURCE_WORK_TYPE_CONES); an unknown
+# value is written as is.
+ARR_T2SSOURCEWORK_TYPE_LABEL = {
+    "en": {"literary": "literary work", "comic": "comic", "stage": "stage work", "game": "game",
+           "screen": "film or series", "folklore": "tale", "other": "",
+           "manga": "manga", "light_novel": "light novel", "play": "play", "musical": "musical"},
+    "fr": {"literary": "œuvre littéraire", "comic": "bande dessinée", "stage": "œuvre de scène", "game": "jeu",
+           "screen": "film ou série", "folklore": "conte", "other": "",
+           "manga": "manga", "light_novel": "light novel", "play": "pièce de théâtre", "musical": "comédie musicale"},
+}
 
 #Anonymized queries collection
 anonymizedqueries = chroma_client.get_or_create_collection(
@@ -865,8 +888,42 @@ try:
                     strdocument = strdocument[:max_chars] + "..."
                 return strdocument
 
-            def f_process_t2slocation_embeddings(*, strentityname, strentitycollection, strtablename, stroldid, chromacollection):
+            def f_composet2ssourceworkdocument(strname, strtype, stroverview, lang_code, row):
+                """Compose the document of one source work in one language.
+
+                ``<name>: <form or type word>, <year>, <Wikidata description>``, the parts after the
+                colon optional, the colon being the ``document_name_separator`` of fastapi-text2sql
+                so that only the name enters the lexical ratio. The form or type and the year stay in
+                the vector: they separate "Dracula: literary work, 1897" from "Dracula: film or
+                series, 1931".
+                """
+                arrlabels = ARR_T2SSOURCEWORK_TYPE_LABEL.get(lang_code, {})
+                strform = (row.get("SOURCE_WORK_FORM") or "").strip()
+                arrparts = []
+                strkind = arrlabels.get(strform, strform) if strform != "" else arrlabels.get(strtype, strtype)
+                if strkind:
+                    arrparts.append(strkind)
+                if row.get("SOURCE_WORK_YEAR") is not None:
+                    arrparts.append(str(row.get("SOURCE_WORK_YEAR")))
+                if stroverview != "":
+                    arrparts.append(stroverview)
+                strdocument = strname
+                if arrparts:
+                    strdocument += ": " + ", ".join(arrparts)
+                if len(strdocument) > max_chars:
+                    strdocument = strdocument[:max_chars] + "..."
+                return strdocument
+
+            def f_process_t2slocation_embeddings(*, strentityname, strentitycollection, strtablename, stroldid, chromacollection,
+                                                 strkeycol="ID_LOCATION", strnamecol="LOCATION_NAME",
+                                                 strnamefrcol="LOCATION_NAME_FR", strtypecol="LOCATION_TYPE",
+                                                 strtypemetakey="location_type", strextracols="", fcompose=None):
                 """Sync the ``t2slocations`` collection with the ``T_WC_T2S_LOCATION`` read-model (EMBEDDING-UPDATE-005).
+
+                Generalised on 2026-10-10 for ``t2ssourceworks`` (process 217, EMBEDDING-UPDATE-011):
+                the key, name, French name and type columns, the metadata key of the type, extra
+                SELECT columns and the document composer are parameters, their defaults being the
+                location ones, so process 216 runs exactly as before.
 
                 Same two watermarks and same closing server variables as the generic functions.
                 Four differences, each decided on 2026-09-13 and explained next to the code: the
@@ -893,15 +950,18 @@ try:
                 # DELETED = 1, nouveaux numerotes au-dela du maximum). Cette collection ne doit
                 # etre construite qu'APRES ce correctif : sur une table qui renumerote, chaque
                 # nuit re-clerait et re-plongerait tout.
+                if fcompose is None:
+                    fcompose = lambda strname, strtype, stroverview, lang_code, row: f_composet2slocationdocument(strname, strtype, stroverview, lang_code)
                 strsql = ""
-                strsql += "SELECT ID_LOCATION, ID_WIKIDATA, LOCATION_NAME, LOCATION_NAME_FR, OVERVIEW, LOCATION_TYPE, DELETED "
+                strsql += ("SELECT " + strkeycol + ", ID_WIKIDATA, " + strnamecol + ", " + strnamefrcol + ", OVERVIEW, "
+                           + strtypecol + ", DELETED" + (", " + strextracols if strextracols else "") + " ")
                 strsql += "FROM " + strtablename + " "
-                strsql += "WHERE ID_LOCATION IS NOT NULL "
+                strsql += "WHERE " + strkeycol + " IS NOT NULL "
                 if stroldid is not None and str(stroldid).strip().isdigit():
-                    strsql += "AND ID_LOCATION >= " + str(int(str(stroldid).strip())) + " "
+                    strsql += "AND " + strkeycol + " >= " + str(int(str(stroldid).strip())) + " "
                 if strstartdatetimeprevious is not None and str(strstartdatetimeprevious).strip() != "":
                     strsql += "AND TIM_UPDATED >= '" + str(strstartdatetimeprevious).strip().replace("'", "''") + "' "
-                strsql += "ORDER BY ID_LOCATION ASC "
+                strsql += "ORDER BY " + strkeycol + " ASC "
                 # Pas de rejeu sans le filtre de date en cas d'erreur : le 209 le faisait, et une
                 # erreur quelconque basculait en silence d'un passage incremental a un balayage
                 # complet. Ici l'erreur remonte.
@@ -909,7 +969,7 @@ try:
                 results = cursor.fetchall()
                 print(f"{len(results)} lines")
 
-                arrmetadatakeys = ("id", "language", "name", "id_wikidata", "location_type")
+                arrmetadatakeys = ("id", "language", "name", "id_wikidata", strtypemetakey)
                 lngbatchsize = 500
                 lngaddedcount = 0
                 lngupdatedcount = 0
@@ -918,18 +978,18 @@ try:
                 lngunchangedcount = 0
                 for lngoffset in range(0, len(results), lngbatchsize):
                     arrrows = results[lngoffset:lngoffset + lngbatchsize]
-                    cp.f_setservervariable(strservervariablenameid, str(arrrows[0]["ID_LOCATION"]), f"Current {strentityname} ID in the embedding update process", 0)
+                    cp.f_setservervariable(strservervariablenameid, str(arrrows[0][strkeycol]), f"Current {strentityname} ID in the embedding update process", 0)
                     arrexpected = {}
                     arrremovecandidates = []
                     for row in arrrows:
                         strwikidataid = (row.get("ID_WIKIDATA") or "").strip()
-                        lnglocationid = row.get("ID_LOCATION")
+                        lnglocationid = row.get(strkeycol)
                         intdeleted = row.get("DELETED") or 0
-                        strtype = (row.get("LOCATION_TYPE") or "").strip()
+                        strtype = (row.get(strtypecol) or "").strip()
                         stroverview = (row.get("OVERVIEW") or "").strip().replace("\n", " ")
                         arrname = {}
-                        arrname["en"] = (row.get("LOCATION_NAME") or "").strip()
-                        arrname["fr"] = (row.get("LOCATION_NAME_FR") or "").strip()
+                        arrname["en"] = (row.get(strnamecol) or "").strip()
+                        arrname["fr"] = (row.get(strnamefrcol) or "").strip()
                         for lang_code in ("en", "fr"):
                             strdocid = strentityname + "id_" + str(lnglocationid) + "_" + lang_code
                             strname = arrname[lang_code]
@@ -940,10 +1000,10 @@ try:
                             if intdeleted == 1 or strname == "" or (lang_code == "fr" and strname == arrname["en"]):
                                 arrremovecandidates.append(strdocid)
                                 continue
-                            strdocument = f_composet2slocationdocument(strname, strtype, stroverview, lang_code)
+                            strdocument = fcompose(strname, strtype, stroverview, lang_code, row)
                             arrmetadata = {"id": str(lnglocationid), "language": lang_code, "name": strname, "id_wikidata": strwikidataid}
                             if strtype != "":
-                                arrmetadata["location_type"] = strtype
+                                arrmetadata[strtypemetakey] = strtype
                             arrexpected[strdocid] = (strdocument, arrmetadata)
 
                     # Un seul get par lot, la ou le 209 en faisait un par document.
@@ -973,14 +1033,14 @@ try:
                             arraddids.append(strdocid)
                             arradddocuments.append(strdocument)
                             arraddmetadatas.append(arrmetadata)
-                            print(f"ID_LOCATION: {arrmetadata['id']}, {strdocument} -> ADDED")
+                            print(f"{strkeycol}: {arrmetadata['id']}, {strdocument} -> ADDED")
                             continue
                         strexistingdoc, arrexistingmetadata = arrexisting[strdocid]
                         if strexistingdoc != strdocument:
                             arrupdateids.append(strdocid)
                             arrupdatedocuments.append(strdocument)
                             arrupdatemetadatas.append(arrmetadata)
-                            print(f"ID_LOCATION: {arrmetadata['id']}, {strdocument} -> UPDATED")
+                            print(f"{strkeycol}: {arrmetadata['id']}, {strdocument} -> UPDATED")
                             continue
                         arrexistingmanaged = {strkey: strvalue for strkey, strvalue in arrexistingmetadata.items() if strkey in arrmetadatakeys}
                         if arrexistingmanaged != arrmetadata:
@@ -989,7 +1049,7 @@ try:
                             # change sans que le nom bouge).
                             arrmetadataids.append(strdocid)
                             arrmetadatametadatas.append(arrmetadata)
-                            print(f"ID_LOCATION: {arrmetadata['id']}, {strdocument} -> METADATA")
+                            print(f"{strkeycol}: {arrmetadata['id']}, {strdocument} -> METADATA")
                             continue
                         lngunchangedcount += 1
 
@@ -1009,8 +1069,8 @@ try:
                 # lignes vivantes, la ou le 209 faisait un SELECT par document.
                 print(f"Delete all {strentityname} embeddings that do not exist anymore in the {strtablename} table")
                 f_logmemory(f"before {strentityname} cleanup")
-                cursor.execute("SELECT ID_LOCATION FROM " + strtablename + " WHERE ID_LOCATION IS NOT NULL AND (DELETED IS NULL OR DELETED = 0)")
-                arrlivingids = set(str(row.get("ID_LOCATION")) for row in cursor.fetchall())
+                cursor.execute("SELECT " + strkeycol + " FROM " + strtablename + " WHERE " + strkeycol + " IS NOT NULL AND (DELETED IS NULL OR DELETED = 0)")
+                arrlivingids = set(str(row.get(strkeycol)) for row in cursor.fetchall())
                 try:
                     lngcollectioncount = chromacollection.count()
                     print(f"{strentityname} collection holds {lngcollectioncount} docs")
@@ -1060,7 +1120,7 @@ try:
                 cp.f_setservervariable(strservervariablenamestartdatetime, strprocessstartlocal, f"Date and time of the last start of the {strentityname} embedding update process", 0)
 
             #arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 204: 'person', 205: 'company', 206: 'network', 207: 'character', 208: 'group', 209: 'location', 210: 'award'}
-            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+            arrprocessscope = {201: 'topic', 202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             strservervariablenametopicid = strservervariableprefix + "topic" + "id"
             strservervariablenamemovieid = strservervariableprefix + "movie" + "id"
             strservervariablenameserieid = strservervariableprefix + "serie" + "id"
@@ -1093,39 +1153,43 @@ try:
             strdeathidold = cp.f_getservervariable(strservervariablenamedeathid,0)
             strnominationidold = cp.f_getservervariable(strservervariablenamenominationid,0)
             strt2slocationidold = cp.f_getservervariable(strservervariablenamet2slocationid,0)
+            strservervariablenamet2ssourceworkid = strservervariableprefix + "t2ssourcework" + "id"
+            strt2ssourceworkidold = cp.f_getservervariable(strservervariablenamet2ssourceworkid,0)
 
             strcurrentcontent = cp.f_getservervariable(strservervariablenamecurrentcontent,0)
             
             if strcurrentcontent == "movie":
-                arrprocessscope = {202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {202: 'movie', 203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "serie":
-                arrprocessscope = {203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {203: 'serie', 205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "person":
                 # Process 204 is retired: an old resume point inside it resumes at 205.
-                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "company":
-                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {205: 'company', 206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "network":
-                arrprocessscope = {206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {206: 'network', 208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "group":
-                arrprocessscope = {208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {208: 'group', 210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "location":
                 # Process 209 is retired (EMBEDDING-UPDATE-010): an old resume point inside it resumes at 210.
-                arrprocessscope = {210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "award":
-                arrprocessscope = {210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {210: 'award', 211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "list":
-                arrprocessscope = {211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {211: 'list', 212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "collection":
-                arrprocessscope = {212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {212: 'collection', 213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "movement":
-                arrprocessscope = {213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {213: 'movement', 214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "death":
-                arrprocessscope = {214: 'death', 215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {214: 'death', 215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "nomination":
-                arrprocessscope = {215: 'nomination', 216: 't2slocation'}
+                arrprocessscope = {215: 'nomination', 216: 't2slocation', 217: 't2ssourcework'}
             elif strcurrentcontent == "t2slocation":
-                arrprocessscope = {216: 't2slocation'}
+                arrprocessscope = {216: 't2slocation', 217: 't2ssourcework'}
+            elif strcurrentcontent == "t2ssourcework":
+                arrprocessscope = {217: 't2ssourcework'}
             """
             elif strcurrentcontent == "character":
                 arrprocessscope = {207: 'character', 208: 'group', 209: 'location'}
@@ -1447,7 +1511,32 @@ try:
                             chromacollection=t2slocations,
                         )
 
-                if intindex == 216:
+                elif intindex == 217:
+                    # Create embeddings for the source works read-model (EMBEDDING-UPDATE-011):
+                    # the works movies and series are based on, typed by process 73 of
+                    # tmdb-movie-preprocess. Same function as 216, other columns.
+                    strentityname = "t2ssourcework"
+                    strentitycollection = "t2ssourceworks"
+                    strtablename = "T_WC_T2S_SOURCE_WORK"
+                    if t2ssourceworks is None:
+                        print("t2ssourceworks collection unavailable at startup, process 217 skipped this run.")
+                    else:
+                        f_process_t2slocation_embeddings(
+                            strentityname=strentityname,
+                            strentitycollection=strentitycollection,
+                            strtablename=strtablename,
+                            stroldid=strt2ssourceworkidold,
+                            chromacollection=t2ssourceworks,
+                            strkeycol="ID_SOURCE_WORK",
+                            strnamecol="SOURCE_WORK_NAME",
+                            strnamefrcol="SOURCE_WORK_NAME_FR",
+                            strtypecol="SOURCE_WORK_TYPE",
+                            strtypemetakey="source_work_type",
+                            strextracols="SOURCE_WORK_FORM, SOURCE_WORK_YEAR",
+                            fcompose=f_composet2ssourceworkdocument,
+                        )
+
+                if intindex == 217:
                     # Last process is finished
                     cp.f_setservervariable(strservervariablenamecurrentcontent,"","Current content processed in the embedding update process",0)
             # Calculate total runtime and convert to readable format

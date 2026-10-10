@@ -207,6 +207,7 @@ Current process IDs include:
 | 214 | deaths | Bilingual EN/FR; overview appended to text; Wikidata ID stored in metadata |
 | 215 | nominations | Bilingual EN/FR; overview appended to text; Wikidata ID stored in metadata |
 | 216 | t2slocations | Bilingual EN/FR; read-model `T_WC_T2S_LOCATION`; keyed on `ID_LOCATION`; Wikidata id in metadata; type word and Wikidata description appended; metadata reconciled without re-embedding; set-difference orphan sweep (EMBEDDING-UPDATE-005) |
+| 217 | t2ssourceworks | Bilingual EN/FR; read-model `T_WC_T2S_SOURCE_WORK` (the works movies and series are based on, Wikidata P144, tmdb-movie-preprocess process 73); keyed on `ID_SOURCE_WORK`; document `<name>: <form or type word>, <year>, <Wikidata description>`; same function as 216 with other columns; read by fastapi-text2sql to resolve `Source_work_name` (EMBEDDING-UPDATE-011) |
 
 ### Process 216: `t2slocations`
 

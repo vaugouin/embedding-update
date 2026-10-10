@@ -182,7 +182,7 @@ description; these are the constraints.
 - **No silent full-scan fallback.** Process 209 replays its query without the date filter on any
   exception; 216 lets the error surface. Watermarks and their reset follow the two-variable lifecycle
   above (`strembeddingupdatet2slocationstartdatetime`, `strembeddingupdatet2slocationid`).
-- **216 is the last process of the scope**, so the end-of-run marker is `if intindex == 216`. A process
+- **217 (`t2ssourceworks`, EMBEDDING-UPDATE-011) is the last process of the scope since 2026-10-10**, so the end-of-run marker is `if intindex == 217`; 216 and 217 share `f_process_t2slocation_embeddings`, whose column names are parameters (location defaults). Before that, 216 was last: A process
   added after it must move that marker, or `currentcontent` is cleared one process too early and a
   crash in the new process would not resume. Being last also means `UPDATE T_WC_SERVER_VARIABLE SET
   VAR_VALUE = 't2slocation' WHERE VAR_NAME = 'strembeddingupdatecurrentcontent'` runs 216 alone, which
