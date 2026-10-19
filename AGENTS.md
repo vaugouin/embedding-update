@@ -187,6 +187,16 @@ description; these are the constraints.
   crash in the new process would not resume. Being last also means `UPDATE T_WC_SERVER_VARIABLE SET
   VAR_VALUE = 't2slocation' WHERE VAR_NAME = 'strembeddingupdatecurrentcontent'` runs 216 alone, which
   is the way to run it on demand without editing code.
+- **No counter in the metadata, decided 2026-10-19 (EMBEDDING-UPDATE-013).** `MOVIE_COUNT`, `SERIE_COUNT`
+  and `EPISODE_COUNT` stay out of the document metadata: `fastapi-text2sql` resolves a place from the
+  documents, ids and distances only (`entity.py`, the ChromaDB branch) and reads no metadata, so the
+  counts would buy nothing until a resolver uses them to tell homonyms apart (FASTAPI-TEXT2SQL-258),
+  and they change nightly, which would turn into metadata writes on every run. Revisit with -258.
+  A place cited only by episodes (440 since 2026-10-18) is embedded like any other: 216 reads no counter.
+- **Coverage check: `check-t2slocations-coverage.py`** (read only). It recomputes the expected document ids
+  from `T_WC_T2S_LOCATION` with 216's rules and asks Chroma which exist; it reports the missing ones (all
+  places, and episode-only places), and the documents 216 would remove. Run it in the job's image on the
+  VPS (command in its docstring); ChromaDB is not reachable from SQL or from the PC.
 - **`chromadb` is pinned to the 1.x line** (`>=1.0.0,<2.0.0`) because the `configuration=` parameter
   belongs to the 1.x client; the code still falls back to the legacy `hnsw:*` metadata keys if the
   parameter is missing.
@@ -226,8 +236,8 @@ the scheduled job's container, and `-it` (foreground) to watch progress.
 
 ---
 
-**Last Updated**: 2026-06-24
-**Current Version**: 1.0.1 
+**Last Updated**: 2026-10-19
+**Current Version**: 1.0.2 
 
 ## Backlog (Nestor second-brain)
 
