@@ -236,8 +236,8 @@ the scheduled job's container, and `-it` (foreground) to watch progress.
 
 ---
 
-**Last Updated**: 2026-10-19
-**Current Version**: 1.0.2 
+**Last Updated**: 2026-10-25
+**Current Version**: 1.0.3 
 
 ## Backlog (Nestor second-brain)
 
