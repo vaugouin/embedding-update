@@ -1,6 +1,6 @@
 # Embedding Update
 
-This repository contains a Python script, `embedding-update.py`, used to maintain vector embeddings in a ChromaDB instance from data stored in a MySQL database. It focuses on media-related entities such as topics, movies, series, and persons, and keeps their embeddings in sync with the source tables.
+This repository contains a Python script, `embedding-update.py`, used to maintain vector embeddings in a ChromaDB instance from data stored in a MySQL database. It focuses on media-related entities such as topics, movies, series, places and source works, and keeps their embeddings in sync with the source tables.
 
 ## Overview
 
@@ -18,7 +18,7 @@ This repository contains a Python script, `embedding-update.py`, used to maintai
   - `networks`
   - `characters` (collection exists but processing is currently disabled — see Processes)
   - `groups`
-  - `anonymizedqueries`
+  - `anonymizedqueries` (opened at startup, created if missing; no process of this script writes to it)
   - `awards`
   - `nominations` (bilingual EN/FR; overview appended to text)
   - `lists`
@@ -26,7 +26,7 @@ This repository contains a Python script, `embedding-update.py`, used to maintai
   - `deaths` (bilingual EN/FR; overview appended to text)
   - `movements`
   - `t2slocations` (bilingual EN/FR; the locations read-model `T_WC_T2S_LOCATION`, keyed on `ID_LOCATION`; created here with an explicit HNSW configuration, see Process 216)
-- **Iterates over entities** in the database and for each entity type:
+  - `t2ssourceworks` (bilingual EN/FR; the source-works read-model `T_WC_T2S_SOURCE_WORK`, keyed on `ID_SOURCE_WORK`; created like `t2slocations`, process 217)- **Iterates over entities** in the database and for each entity type:
   - Builds a stable document ID like `topicid_<ID>_<LANG>` or `movieid_<ID>_<LANG>`.
   - Creates or updates the corresponding document in ChromaDB.
   - Deletes documents whose source rows have been deleted or no longer meet criteria.
@@ -36,28 +36,30 @@ The script is designed to be run periodically (e.g. by a scheduler or cron-like 
 
 ## Requirements
 
-- Python 3.9+ (recommended)
+- Python 3.10 (the Docker image is built on `python:3.10.5-slim-bullseye`)
 - Access to:
   - An OpenAI API key
   - A running ChromaDB HTTP server (default: `localhost:8100`)
   - A MySQL-compatible database with the required tables
-- The following Python packages (see `embedding-update.py` imports):
+- The Python packages of `requirements.txt`:
   - `pandas`
   - `numpy`
   - `openai`
   - `python-dotenv`
-  - `chromadb`
+  - `chromadb` (pinned to 1.x)
   - `psutil`
   - `pymysql`
+  - `pytz`
+  - `requests`
   - Local module: `citizenphil` (project-specific, not provided on PyPI)
 
-Install the dependencies, for example:
+Install the dependencies:
 
 ```bash
-pip install pandas numpy openai python-dotenv chromadb psutil pymysql
+pip install -r requirements.txt
 ```
 
-You also need the `citizenphil` module available on the Python path (typically part of the same codebase or installed as a private package).
+The `citizenphil` module is `citizenphil.py`, at the root of this repository.
 
 ## Configuration
 
@@ -66,12 +68,10 @@ You also need the `citizenphil` module available on the Python path (typically p
 The script expects an `.env` file (or equivalent environment variables) providing at least:
 
 - `OPENAI_API_KEY` – your OpenAI API key
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_NAMESPACE` (database access, read by `citizenphil.py`)
+- `USER_TIMEZONE` (default `Europe/Paris`)
 
-`python-dotenv` loads this automatically at startup.
-
-### Claude (Anthropic) support
-
-This project can be configured to use Anthropic/Claude as an alternative embedding provider. See `CLAUDE.md` for setup instructions, environment variables, and a minimal usage example. If you choose Claude, set `CLAUDE_API_KEY` (or add it to `citizenphilsecrets.py`) and update the embedding wrapper in `embedding-update.py` to call the Claude SDK instead of OpenAI.
+`python-dotenv` loads this automatically at startup. `.env.example` lists them.
 
 ### ChromaDB
 
@@ -108,14 +108,14 @@ At a high level, the script:
    - Currently processed entity kind (`strembeddingupdatecurrentcontent`)
    - Execution metadata and reports
 
-3. **Processes each entity type** (topics, movies, series, companies, networks, groups, awards, lists, collections, movements):
+3. **Processes each entity type** (topics, movies, series, companies, networks, groups, awards, lists, collections, movements, deaths, nominations, t2slocations, t2ssourceworks):
    - Queries the corresponding table(s) via SQL.
    - Builds the document text (e.g. topic name + overview, or movie/series titles in different languages), truncated to stay inside OpenAI embedding limits (~32 000 characters).
    - Uses consistent ID patterns to identify documents in ChromaDB.
    - For **deleted or invalid records**, removes corresponding documents from ChromaDB.
    - For **existing records**, compares content and updates the document if it changed.
    - For **new records**, adds documents so ChromaDB can generate embeddings.
-   - **Locations** are handled via a custom implementation: Wikidata items are fetched by joining `T_WC_WIKIDATA_ITEM_PROPERTY` (filtered on properties P840 — narrative location — and P915 — filming location) with `T_WC_T2S_ITEM`. Location document IDs use the Wikidata item ID (string) rather than a numeric primary key.
+   - **Places and source works** are read from the read-models `T_WC_T2S_LOCATION` and `T_WC_T2S_SOURCE_WORK` by one dedicated function (`f_process_t2slocation_embeddings`), keyed on `ID_LOCATION` / `ID_SOURCE_WORK`; see Process 216. (The former QID-keyed `locations` process 209 is retired.)
    - **Topics** include an extra deletion criterion: topics associated with only one movie or series have their embeddings removed.
 
 4. **Cleans up orphaned embeddings**
@@ -157,6 +157,19 @@ docker build -t embedding-update-python-app .
 docker run -d --rm --network="host" --env-file /home/debian/docker/embedding-update/.env --name embedding-update embedding-update-python-app
 ```
 
+On the VPS, cron runs `embedding-update.sh`, which first checks ChromaDB with `~/docker/chromadb/chromadb-ensure.sh`, then builds and starts the container above unless it is already running. `off.sh` switches the scheduled run off (it writes a `CRON_OFF` flag file that the launcher reads) and `on.sh` switches it back on.
+
+A one-off script (e.g. a backfill) reuses the same image by overriding `CMD` after the image name; give it a distinct `--name` so it never collides with the scheduled job's container, and run it in the foreground (`-it`) to watch progress. Example, the movie-year metadata backfill:
+
+```bash
+cd /home/debian/docker/embedding-update
+docker build -t embedding-update-python-app .
+# dry-run first (reports only, writes nothing):
+docker run -it --rm --network host   --env-file /home/debian/docker/embedding-update/.env   --name embedding-update-backfill   embedding-update-python-app python backfill-movie-year.py --dry-run
+# then the real run:
+docker run -it --rm --network host   --env-file /home/debian/docker/embedding-update/.env   --name embedding-update-backfill   embedding-update-python-app python backfill-movie-year.py
+```
+
 ## Collections and ID conventions
 
 Each collection uses a consistent document ID pattern:
@@ -164,11 +177,11 @@ Each collection uses a consistent document ID pattern:
 - Topics: `topicid_<ID_TOPIC>_<LANG>` (bilingual EN/FR; overview appended to text)
 - Movies: `movieid_<ID_MOVIE>_<LANG>` (EN, FR, and original language)
 - Series: `serieid_<ID_SERIE>_<LANG>` (EN, FR, and original language)
-- Persons: `personid_<ID_PERSON>_<LANG>` (single-language, English)
+- Persons: `personid_<ID_PERSON>_<LANG>` (single-language, English; collection deleted with process 204, retired)
 - Companies: `companyid_<ID_COMPANY>_<LANG>` (single-language, English)
 - Networks: `networkid_<ID_NETWORK>_<LANG>` (single-language, English)
 - Groups: `groupid_<ID_GROUP>_<LANG>` (bilingual EN/FR; non-numeric Wikidata-based ID)
-- Locations: `locationid_<ID_ITEM>_<LANG>` (bilingual EN/FR; `ID_ITEM` is a Wikidata string ID, e.g. `Q84`)
+- Locations: `locationid_<ID_ITEM>_<LANG>` (bilingual EN/FR; `ID_ITEM` is a Wikidata string ID, e.g. `Q84`; collection deleted with process 209, retired)
 - Awards: `awardid_<ID_AWARD>_<LANG>` (bilingual EN/FR)
 - Lists: `listid_<ID_T2S_LIST>_<LANG>` (bilingual EN/FR)
 - Collections: `collectionid_<ID_T2S_COLLECTION>_<LANG>` (bilingual EN/FR)
@@ -176,6 +189,7 @@ Each collection uses a consistent document ID pattern:
 - Deaths: `deathid_<ID_DEATH>_<LANG>` (bilingual EN/FR; overview appended to text)
 - Nominations: `nominationid_<ID_NOMINATION>_<LANG>` (bilingual EN/FR; overview appended to text)
 - T2S locations: `t2slocationid_<ID_LOCATION>_<LANG>` (bilingual EN/FR; document `<name>: <type word>, <Wikidata description>`; Wikidata id in metadata, see Process 216)
+- T2S source works: `t2ssourceworkid_<ID_SOURCE_WORK>_<LANG>` (bilingual EN/FR; process 217)
 
 This convention allows the script to:
 
@@ -252,7 +266,7 @@ Because the read-model is rebuilt nightly with a fresh `TIM_UPDATED`, the first 
 the whole table (about 12 000 rows), compares every document and re-embeds nothing that did not
 change; the later passes of the day read nothing.
 
-**First run, on the VPS.** Process 216 is the last of the scope, so setting the resume marker isolates it:
+**First run, on the VPS.** Setting the resume marker to `t2slocation` runs only processes 216 and 217 (217, `t2ssourceworks`, has been the last of the scope since 2026-10-10; it shares the same function, and the run clears the marker when 217 ends):
 
 ```sql
 UPDATE T_WC_SERVER_VARIABLE SET VAR_VALUE = 't2slocation'
@@ -268,4 +282,5 @@ rows plus the living FR rows whose label differs; zero orphans. A second run rig
 
 - The script is optimized to avoid re-embedding unchanged content.
 - There are commented blocks for special maintenance operations (e.g. batch deletes); those are not executed in normal runs.
+- Companion scripts, run in the same image: `backfill-movie-year.py` (one-off: adds a `year` metadata to the `movies` documents without re-embedding), `check-t2slocations-coverage.py` (read-only coverage check of `t2slocations`, command in its docstring), `deduplicate-embeddings.py` (one-off cleanup of identical EN/FR documents, see `deduplicate-embeddings.md`).
  - If you modify the schema, collection names, or ID patterns, ensure you update `embedding-update.py` accordingly.
