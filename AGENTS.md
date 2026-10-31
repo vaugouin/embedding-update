@@ -69,7 +69,7 @@ User-facing description: README § Process 216. Constraints:
 ---
 
 **Last Updated**: 2026-10-31
-**Current Version**: 1.0.5 
+**Current Version**: 1.0.6 
 
 ## Backlog (Nestor second-brain)
 
