@@ -1,5 +1,9 @@
 # AGENTS.md - Agent Guide for Embedding Update
 
+## Canary
+
+Start every reply with "Philippe,": no exceptions, including short replies and tool summaries.
+
 Canonical agent guide for this repo (`CLAUDE.md` and any other tool-specific file only point here). Overview, collections, document-id patterns, process table, install and run steps are in @README.md; reference DDL is in @doc/sql/ (read-only unless asked). Update `README.md` for user-facing changes, this file only when agent workflow or safety context changes.
 
 ---
@@ -69,7 +73,7 @@ User-facing description: README § Process 216. Constraints:
 ---
 
 **Last Updated**: 2026-10-31
-**Current Version**: 1.0.6 
+**Current Version**: 1.0.7 
 
 ## Backlog (Nestor second-brain)
 
