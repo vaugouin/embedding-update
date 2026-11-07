@@ -22,12 +22,11 @@ class OpenAIEmbeddingFunction:
     def name(self):
         return f"openai_{self.model.replace('-', '_')}"
 
+# "persons" (2026-10-09), "companies" and "networks" (2026-11-07) are deleted: get_or_create below
+# would recreate them empty, so they stay out of this list.
 COLLECTION_NAMES = [
-    "persons",
     "movies",
     "series",
-    "companies",
-    "networks",
     "topics",
     "groups",
     "characters",

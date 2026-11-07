@@ -14,8 +14,6 @@ This repository contains a Python script, `embedding-update.py`, used to maintai
   - `topics`
   - `movies`
   - `series`
-  - `companies`
-  - `networks`
   - `characters` (collection exists but processing is currently disabled — see Processes)
   - `groups`
   - `anonymizedqueries` (opened at startup, created if missing; no process of this script writes to it)
@@ -108,7 +106,7 @@ At a high level, the script:
    - Currently processed entity kind (`strembeddingupdatecurrentcontent`)
    - Execution metadata and reports
 
-3. **Processes each entity type** (topics, movies, series, companies, networks, groups, awards, lists, collections, movements, deaths, nominations, t2slocations, t2ssourceworks):
+3. **Processes each entity type** (topics, movies, series, groups, awards, lists, collections, movements, deaths, nominations, t2slocations, t2ssourceworks):
    - Queries the corresponding table(s) via SQL.
    - Builds the document text (e.g. topic name + overview, or movie/series titles in different languages), truncated to stay inside OpenAI embedding limits (~32 000 characters).
    - Uses consistent ID patterns to identify documents in ChromaDB.
@@ -178,8 +176,8 @@ Each collection uses a consistent document ID pattern:
 - Movies: `movieid_<ID_MOVIE>_<LANG>` (EN, FR, and original language)
 - Series: `serieid_<ID_SERIE>_<LANG>` (EN, FR, and original language)
 - Persons: `personid_<ID_PERSON>_<LANG>` (single-language, English; collection deleted with process 204, retired)
-- Companies: `companyid_<ID_COMPANY>_<LANG>` (single-language, English)
-- Networks: `networkid_<ID_NETWORK>_<LANG>` (single-language, English)
+- Companies: `companyid_<ID_COMPANY>_<LANG>` (single-language, English; collection deleted with process 205, retired)
+- Networks: `networkid_<ID_NETWORK>_<LANG>` (single-language, English; collection deleted with process 206, retired)
 - Groups: `groupid_<ID_GROUP>_<LANG>` (bilingual EN/FR; non-numeric Wikidata-based ID)
 - Locations: `locationid_<ID_ITEM>_<LANG>` (bilingual EN/FR; `ID_ITEM` is a Wikidata string ID, e.g. `Q84`; collection deleted with process 209, retired)
 - Awards: `awardid_<ID_AWARD>_<LANG>` (bilingual EN/FR)
@@ -209,8 +207,8 @@ Current process IDs include:
 | 202 | movies | EN, FR, and original language via lang table |
 | 203 | series | EN, FR, and original language via lang table |
 | 204 | ~~persons~~ | **Retired 2026-10-09**: the collection was never queried by `fastapi-text2sql`, which resolves person names with rapidfuzz on `T_WC_T2S_PERSON` / `T_WC_T2S_PERSON_ALSO_KNOWN_AS`; the collection was deleted. Do not bring it back without a reader: it would re-embed every person |
-| 205 | companies | Single-language (English) |
-| 206 | networks | Single-language (English) |
+| 205 | ~~companies~~ | **Retired 2026-11-07** (FASTAPI-TEXT2SQL-360): `fastapi-text2sql` resolves company names with its in-memory lexicon on `T_WC_T2S_COMPANY`, and ChromaDB never won in the campaign of 2026-11-06; the collection is deleted. A resume point inside it resumes at 208 |
+| 206 | ~~networks~~ | **Retired 2026-11-07**, same reason, lexicon on `T_WC_T2S_NETWORK`; collection deleted, resume at 208 |
 | 207 | ~~characters~~ | **Currently disabled** (mapped to 1207 in routing) |
 | 208 | groups | Bilingual EN/FR; non-numeric Wikidata ID |
 | 209 | ~~locations~~ | **Retired 2026-10-09** (EMBEDDING-UPDATE-010): the QID-keyed collection served API 1.1.18 only and was deleted with it; places are in `t2slocations` (process 216) |
